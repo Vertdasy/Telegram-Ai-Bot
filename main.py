@@ -104,13 +104,16 @@ async def handle_message(message: types.Message):
         logging.info(f"Отправка стриминг-запроса в OpenRouter {ID_MODEL} для {user_id}...")
 
         # Функция для синхронного получения потока от OpenRouter
+                # Функция для синхронного получения потока от OpenRouter
         def get_stream():
             return client.chat.completions.create(
                 model=ID_MODEL,
                 messages=user_history[user_id],
                 stream=True,  # Включаем стриминг!
+                stream_options={"include_usage": True},  # Добавляем для стабильности OpenAI SDK
                 timeout=30.0
             )
+
 
         loop = asyncio.get_event_loop()
         stream = await loop.run_in_executor(None, get_stream)
