@@ -121,9 +121,10 @@ async def handle_message(message: types.Message):
         
         # Читаем токены по мере их генерации моделью
         for chunk in stream:
-            token = chunk.choices[0].delta.content
-            if token:
-                ai_text += token
+            if chunk.choices and len(chunk.choices) > 0:
+                token = chunk.choices[0].delta.content  # <--- ИСПРАВЛЕНО
+                if token:
+                    ai_text += token
                 
                 # Защита от лимитов Telegram: обновляем сообщение не чаще раза в 0.6 секунд
                 # И только если текст реально изменился
