@@ -9,6 +9,7 @@ from openai import OpenAI
 # Получаем токены из переменных окружения Render
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+ID_MODEL = os.getenv("ID_MODEL")
 
 # Проверка, что ключи заданы
 if not TELEGRAM_TOKEN or not OPENROUTER_API_KEY:
@@ -51,7 +52,7 @@ async def send_welcome(message: types.Message):
 
     await message.answer(
         f"👋 Привет, {message.from_user.first_name}!\n\n"
-        "Я бот на базе **OpenRouter Free**! 🚀\n"
+        "Я бот на базе **nemotron-3.5-lightning**! 🚀\n"
         "Создатель: @ashoton\n\n"
         "Я запоминаю историю диалога и отвечаю всегда на русском языке.\n\n"
         "Используй меню или просто пиши мне текст!",
@@ -71,7 +72,7 @@ async def handle_message(message: types.Message):
         await message.answer(
             "ℹ **Информация о боте:**\n"
             "• **Создатель:** @ashoton\n"
-            "• **Модель:** OpenRouter Free\n"
+            "• **Модель:**" + ID_MODEL + "\n"
             "• **Язык:** Русский\n"
             "• **Память:** Сохраняет историю сообщений",
             parse_mode="Markdown"
@@ -94,13 +95,13 @@ async def handle_message(message: types.Message):
     user_history[user_id].append({"role": "user", "content": message.text})
 
     try:
-        logging.info(f"Отправка запроса в OpenRouter (openrouter/free) для {user_id}...")
+        logging.info(f"Отправка запроса в OpenRouter "+ ID_MODEL + " для {user_id}...")
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
             lambda: client.chat.completions.create(
-                model="openrouter/free",
+                model=ID_MODEL,
                 messages=user_history[user_id],
                 timeout=30.0
             )
@@ -117,7 +118,11 @@ async def handle_message(message: types.Message):
         user_history[user_id].append({"role": "assistant", "content": clean_text})
         logging.info(f"Успешно получен ответ для {user_id}")
 
-        await message.answer(clean_text)
+        if len(clean_text) > 4000:
+            for i in range(0, len(clean_text), 4000):
+                await message.answer(clean_text[i:i + 4000])
+        else:
+            await message.answer(clean_text)
 
     except Exception as e:
         logging.exception("Ошибка при обращении к OpenRouter API:")
