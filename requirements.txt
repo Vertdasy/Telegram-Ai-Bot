@@ -1,2 +1,3 @@
 aiogram>=3.4
 openai>=1.30
+aiosqlite>=0.19
