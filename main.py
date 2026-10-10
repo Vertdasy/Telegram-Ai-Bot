@@ -64,36 +64,234 @@ DB_PATH = os.getenv("DB_PATH") or ("/data/bot.db" if os.path.isdir("/data") else
 MAX_HISTORY_LEN = 10      # сколько последних сообщений помнить
 EDIT_INTERVAL = 0.7       # как часто обновлять сообщение при стриминге (сек)
 CHUNK = 3500              # размер куска текста для одного сообщения Telegram
-PHOTO_TAG = "[Фото]"      # пометка фото-вопроса в истории
-CONTINUE_TEXT = "Продолжи свой предыдущий ответ с того места, где он оборвался. Не повторяй уже написанное."
+PHOTO_TAG = "[Photo]"     # пометка фото-вопроса в истории
+PHOTO_TAGS = ("[Photo]", "[Фото]")   # второй вариант — для баз прошлой версии
 
-DEFAULT_PROMPT = (
-    "Ты полезный и вежливый AI-ассистент. "
-    "Отвечай строго на русском языке, независимо от языка обращения."
-)
+# ----------------- ЛОКАЛИЗАЦИЯ (интерфейс пользователя) -----------------
+# [i18n-start]
+LANGS = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
 
-# Режимы / персонажи: ключ -> (название, системный промпт; None = промпт по умолчанию из админки)
-MODES = {
-    "default": ("🤖 Обычный", None),
-    "translator": (
-        "🌍 Переводчик",
-        "Ты профессиональный переводчик. Если текст на русском — переводи его на английский, "
-        "во всех остальных случаях переводи на русский. Сохраняй смысл, тон и форматирование. "
-        "Выводи только перевод без пояснений, если не просят иное.",
+TEXTS = {
+    "ru": {
+        "btn_ask": "🤖 Задать вопрос ИИ",
+        "btn_mode": "🎭 Режим",
+        "btn_clear": "📝 Очистить диалог",
+        "btn_info": "ℹ Инфо",
+        "btn_settings": "⚙️ Настройки",
+        "banned": "🚫 Доступ к боту ограничен.",
+        "start": (
+            "👋 Привет, {name}!\n\n"
+            "Я бот на базе <b>{model}</b> 🚀\n\n"
+            "Я помню историю диалога, умею разные режимы (🎭 Режим) и понимаю фото.\n"
+            "Используй меню или просто пиши мне текст!"
+        ),
+        "cleared": "🧹 История диалога очищена! Начнём с чистого листа.",
+        "ask": "💬 Задавай любой вопрос или пришли фото, я готов!",
+        "mode_choose": "🎭 Выбери режим работы:",
+        "mode_set": "✅ Режим: {mode}\nДиалог очищен, можно писать.",
+        "info": (
+            "ℹ <b>Информация о боте:</b>\n"
+            "• <b>Модель:</b> {model}\n"
+            "• <b>Режим:</b> {mode}\n"
+            "• <b>Память:</b> последние {n} сообщений\n"
+            "• <b>Лимиты:</b> {limits}\n"
+            "• <b>Фото:</b> поддерживаются"
+        ),
+        "limits_fmt": "{pm}/мин, {pd}/сутки",
+        "unlimited": "без лимита",
+        "busy": "⏳ Подожди, я ещё отвечаю на предыдущий запрос.",
+        "limit_min": "⏳ Слишком часто: не больше {n} запросов в минуту. Подожди {wait}.",
+        "limit_day": "📅 Дневной лимит ({n} запросов) исчерпан. Новый запрос будет доступен через {wait}.",
+        "wait_sec": "{n} сек.",
+        "wait_min": "{n} мин.",
+        "wait_hm": "{h} ч {m} мин.",
+        "thinking": "🤔 Запрос обрабатывается...",
+        "error": "⚠️ Произошла ошибка при обращении к ИИ: {e}",
+        "empty": "Извините, не удалось сформировать ответ. Попробуйте ещё раз!",
+        "btn_regen": "🔄 Повторить",
+        "btn_cont": "➡️ Продолжить",
+        "nothing_retry": "Нечего повторять",
+        "photo_gone": "Фото больше недоступно — отправь его заново.",
+        "photo_fail": "⚠️ Не удалось загрузить фото: {e}",
+        "photo_caption": "Опиши, что на изображении.",
+        "voice_off": (
+            "🎤 Голосовые пока не поддерживаются: у используемой модели нет распознавания речи. "
+            "Отправь вопрос текстом или фото."
+        ),
+        "voice_fail": "⚠️ Не удалось распознать голосовое: {e}",
+        "voice_empty": "Не удалось разобрать речь, попробуй ещё раз.",
+        "voice_ok": "🎤 Распознано: {text}",
+        "settings": (
+            "⚙️ <b>Настройки</b>\n\n"
+            "🌐 Язык интерфейса и ответов ИИ\n"
+            "🔘 Кнопки «Повторить» и «Продолжить» под ответами"
+        ),
+        "btn_buttons": "🔘 Кнопки под ответом: {state}",
+        "on": "вкл ✅",
+        "off": "выкл ❌",
+        "lang_changed": "✅ Язык: Русский",
+        "myid": "Твой Telegram ID: {id}",
+        "denied": "⛔ Нет доступа.",
+        "admin_unset": (
+            "Админ не настроен. Задай переменную окружения ADMIN_IDS "
+            "со своим ID (твой ID: {id}) и перезапусти бота."
+        ),
+        "continue_text": (
+            "Продолжи свой предыдущий ответ с того места, где он оборвался. "
+            "Не повторяй уже написанное."
+        ),
+    },
+    "en": {
+        "btn_ask": "🤖 Ask the AI",
+        "btn_mode": "🎭 Mode",
+        "btn_clear": "📝 Clear chat",
+        "btn_info": "ℹ Info",
+        "btn_settings": "⚙️ Settings",
+        "banned": "🚫 Access to the bot is restricted.",
+        "start": (
+            "👋 Hi, {name}!\n\n"
+            "I'm a bot powered by <b>{model}</b> 🚀\n\n"
+            "I remember our conversation, have different modes (🎭 Mode) and understand photos.\n"
+            "Use the menu or just send me a message!"
+        ),
+        "cleared": "🧹 Chat history cleared! Let's start fresh.",
+        "ask": "💬 Ask me anything or send a photo, I'm ready!",
+        "mode_choose": "🎭 Choose a mode:",
+        "mode_set": "✅ Mode: {mode}\nChat cleared, you can start writing.",
+        "info": (
+            "ℹ <b>Bot info:</b>\n"
+            "• <b>Model:</b> {model}\n"
+            "• <b>Mode:</b> {mode}\n"
+            "• <b>Memory:</b> last {n} messages\n"
+            "• <b>Limits:</b> {limits}\n"
+            "• <b>Photos:</b> supported"
+        ),
+        "limits_fmt": "{pm}/min, {pd}/day",
+        "unlimited": "unlimited",
+        "busy": "⏳ Please wait, I'm still answering your previous request.",
+        "limit_min": "⏳ Too fast: no more than {n} requests per minute. Please wait {wait}.",
+        "limit_day": "📅 Daily limit ({n} requests) reached. You can send a new request in {wait}.",
+        "wait_sec": "{n} sec.",
+        "wait_min": "{n} min.",
+        "wait_hm": "{h} h {m} min.",
+        "thinking": "🤔 Thinking...",
+        "error": "⚠️ An error occurred while contacting the AI: {e}",
+        "empty": "Sorry, I couldn't generate an answer. Please try again!",
+        "btn_regen": "🔄 Regenerate",
+        "btn_cont": "➡️ Continue",
+        "nothing_retry": "Nothing to repeat",
+        "photo_gone": "The photo is no longer available — please send it again.",
+        "photo_fail": "⚠️ Couldn't load the photo: {e}",
+        "photo_caption": "Describe what is in the image.",
+        "voice_off": (
+            "🎤 Voice messages are not supported yet: the model has no speech recognition. "
+            "Please send your question as text or a photo."
+        ),
+        "voice_fail": "⚠️ Couldn't recognize the voice message: {e}",
+        "voice_empty": "Couldn't make out any speech, please try again.",
+        "voice_ok": "🎤 Recognized: {text}",
+        "settings": (
+            "⚙️ <b>Settings</b>\n\n"
+            "🌐 Interface and AI reply language\n"
+            "🔘 «Regenerate» and «Continue» buttons under answers"
+        ),
+        "btn_buttons": "🔘 Buttons under answers: {state}",
+        "on": "on ✅",
+        "off": "off ❌",
+        "lang_changed": "✅ Language: English",
+        "myid": "Your Telegram ID: {id}",
+        "denied": "⛔ Access denied.",
+        "admin_unset": (
+            "Admin is not configured. Set the ADMIN_IDS environment variable "
+            "to your ID (your ID: {id}) and restart the bot."
+        ),
+        "continue_text": (
+            "Continue your previous answer from where it was cut off. "
+            "Do not repeat what has already been written."
+        ),
+    },
+}
+
+DEFAULT_PROMPT = {
+    "ru": (
+        "Ты полезный и вежливый AI-ассистент. "
+        "Отвечай строго на русском языке, независимо от языка обращения."
     ),
-    "programmer": (
-        "💻 Программист",
-        "Ты опытный программист и наставник. Пиши чистый, рабочий код и оформляй его в блоках кода "
-        "с указанием языка. Кратко объясняй решение, указывай на возможные ошибки и крайние случаи. "
-        "Отвечай на русском языке.",
-    ),
-    "editor": (
-        "✍️ Редактор",
-        "Ты внимательный редактор и корректор. Исправляй орфографию, пунктуацию и стиль присланного "
-        "текста, сохраняя авторский смысл и голос. Сначала дай исправленный текст, затем коротко "
-        "перечисли главные правки. Отвечай на русском языке.",
+    "en": (
+        "You are a helpful and polite AI assistant. "
+        "Always answer strictly in English, regardless of the language of the request."
     ),
 }
+
+# Режимы / персонажи. prompt=None — берётся основной промпт (его можно менять в админке).
+MODES = {
+    "default": {
+        "title": {"ru": "🤖 Обычный", "en": "🤖 Default"},
+        "prompt": None,
+    },
+    "translator": {
+        "title": {"ru": "🌍 Переводчик", "en": "🌍 Translator"},
+        "prompt": {
+            "ru": (
+                "Ты профессиональный переводчик. Если текст на русском — переводи его на английский, "
+                "во всех остальных случаях переводи на русский. Сохраняй смысл, тон и форматирование. "
+                "Выводи только перевод без пояснений, если не просят иное."
+            ),
+            "en": (
+                "You are a professional translator. If the text is in English, translate it into Russian; "
+                "in all other cases translate it into English. Preserve the meaning, tone and formatting. "
+                "Output only the translation without explanations unless asked otherwise."
+            ),
+        },
+    },
+    "programmer": {
+        "title": {"ru": "💻 Программист", "en": "💻 Programmer"},
+        "prompt": {
+            "ru": (
+                "Ты опытный программист и наставник. Пиши чистый, рабочий код и оформляй его в блоках кода "
+                "с указанием языка. Кратко объясняй решение, указывай на возможные ошибки и крайние случаи. "
+                "Отвечай на русском языке."
+            ),
+            "en": (
+                "You are an experienced programmer and mentor. Write clean, working code and put it in code "
+                "blocks with the language specified. Briefly explain the solution and point out possible "
+                "errors and edge cases. Answer in English."
+            ),
+        },
+    },
+    "editor": {
+        "title": {"ru": "✍️ Редактор", "en": "✍️ Editor"},
+        "prompt": {
+            "ru": (
+                "Ты внимательный редактор и корректор. Исправляй орфографию, пунктуацию и стиль присланного "
+                "текста, сохраняя авторский смысл и голос. Сначала дай исправленный текст, затем коротко "
+                "перечисли главные правки. Отвечай на русском языке."
+            ),
+            "en": (
+                "You are a careful editor and proofreader. Fix spelling, punctuation and style in the text "
+                "you receive while preserving the author's meaning and voice. First give the corrected text, "
+                "then briefly list the main changes. Answer in English."
+            ),
+        },
+    },
+}
+
+
+def t(lang: str, key: str, **kw) -> str:
+    s = TEXTS.get(lang, TEXTS["ru"]).get(key) or TEXTS["ru"][key]
+    return s.format(**kw) if kw else s
+
+
+def all_langs(key: str) -> set:
+    """Все варианты текста кнопки на всех языках (для фильтров хендлеров)."""
+    return {TEXTS[code][key] for code in TEXTS}
+# [i18n-end]
+
+BTN_ASK = all_langs("btn_ask")
+BTN_MODE = all_langs("btn_mode")
+BTN_CLEAR = all_langs("btn_clear")
+BTN_INFO = all_langs("btn_info")
+BTN_SETTINGS = all_langs("btn_settings")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -214,7 +412,9 @@ async def init_db():
             last_seen INTEGER,
             msgs INTEGER DEFAULT 0,
             banned INTEGER DEFAULT 0,
-            mode TEXT DEFAULT 'default'
+            mode TEXT DEFAULT 'default',
+            lang TEXT DEFAULT 'ru',
+            buttons INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS history(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,10 +433,16 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id, ts);
         """
     )
-    # миграция для баз, созданных прошлой версией бота
+    # миграция для баз, созданных прошлыми версиями бота
     cur = await db.execute("PRAGMA table_info(users)")
-    if "mode" not in [r["name"] for r in await cur.fetchall()]:
-        await db.execute("ALTER TABLE users ADD COLUMN mode TEXT DEFAULT 'default'")
+    cols = {r["name"] for r in await cur.fetchall()}
+    for name, ddl in (
+        ("mode", "TEXT DEFAULT 'default'"),
+        ("lang", "TEXT DEFAULT 'ru'"),
+        ("buttons", "INTEGER DEFAULT 0"),
+    ):
+        if name not in cols:
+            await db.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
     await db.commit()
     logging.info(f"База данных: {DB_PATH}")
 
@@ -282,14 +488,38 @@ async def is_banned(user_id: int) -> bool:
     return bool(await scalar("SELECT banned FROM users WHERE id=?", (user_id,)))
 
 
+async def get_prefs(user_id: int) -> tuple[str, bool]:
+    """Язык интерфейса и включены ли кнопки «Повторить/Продолжить»."""
+    cur = await db.execute("SELECT lang, buttons FROM users WHERE id=?", (user_id,))
+    row = await cur.fetchone()
+    if not row:
+        return "ru", False
+    lang = row["lang"] if row["lang"] in LANGS else "ru"
+    return lang, bool(row["buttons"])
+
+
+async def get_lang(user_id: int) -> str:
+    return (await get_prefs(user_id))[0]
+
+
+async def set_user_field(user_id: int, field: str, value):
+    if field not in ("mode", "lang", "buttons"):
+        raise ValueError(field)
+    await db.execute(f"UPDATE users SET {field}=? WHERE id=?", (value, user_id))
+    await db.commit()
+
+
 async def get_mode(user_id: int) -> str:
     mode = await scalar("SELECT mode FROM users WHERE id=?", (user_id,))
     return mode if mode in MODES else "default"
 
 
-async def set_mode(user_id: int, mode: str):
-    await db.execute("UPDATE users SET mode=? WHERE id=?", (mode, user_id))
-    await db.commit()
+async def get_system_prompt(mode: str, lang: str) -> str:
+    custom = MODES[mode]["prompt"]
+    if custom:
+        return custom[lang]
+    key = "system_prompt" if lang == "ru" else "system_prompt_en"
+    return await get_setting(key, DEFAULT_PROMPT[lang])
 
 
 async def load_history(user_id: int, limit: int = MAX_HISTORY_LEN) -> list:
@@ -350,16 +580,20 @@ async def get_limits() -> tuple[int, int]:
     return per_min, per_day
 
 
-def fmt_wait(sec: int) -> str:
+def fmt_limit(n: int, lang: str = "ru") -> str:
+    return str(n) if n > 0 else t(lang, "unlimited")
+
+
+def fmt_wait(sec: int, lang: str) -> str:
     sec = max(sec, 1)
     if sec < 60:
-        return f"{sec} сек."
+        return t(lang, "wait_sec", n=sec)
     if sec < 3600:
-        return f"{sec // 60 + 1} мин."
-    return f"{sec // 3600} ч {sec % 3600 // 60} мин."
+        return t(lang, "wait_min", n=sec // 60 + 1)
+    return t(lang, "wait_hm", h=sec // 3600, m=sec % 3600 // 60)
 
 
-async def check_limit(user_id: int) -> str | None:
+async def check_limit(user_id: int, lang: str) -> str | None:
     """Возвращает текст отказа, если лимит исчерпан, иначе None. Админов не ограничиваем."""
     if user_id in ADMIN_IDS:
         return None
@@ -373,7 +607,7 @@ async def check_limit(user_id: int) -> str | None:
             oldest = await scalar(
                 "SELECT MIN(ts) FROM requests WHERE user_id=? AND ts>?", (user_id, now - 60)
             )
-            return f"⏳ Слишком часто: не больше {per_min} запросов в минуту. Подожди {fmt_wait(oldest + 60 - now)}"
+            return t(lang, "limit_min", n=per_min, wait=fmt_wait(oldest + 60 - now, lang))
     if per_day > 0:
         cnt = await scalar(
             "SELECT COUNT(*) FROM requests WHERE user_id=? AND ts>?", (user_id, now - 86400)
@@ -382,35 +616,46 @@ async def check_limit(user_id: int) -> str | None:
             oldest = await scalar(
                 "SELECT MIN(ts) FROM requests WHERE user_id=? AND ts>?", (user_id, now - 86400)
             )
-            return f"📅 Дневной лимит ({per_day} запросов) исчерпан. Новый запрос будет доступен через {fmt_wait(oldest + 86400 - now)}"
+            return t(lang, "limit_day", n=per_day, wait=fmt_wait(oldest + 86400 - now, lang))
     return None
 
 
 # ----------------- КЛАВИАТУРЫ -----------------
 
-def get_main_menu():
+def get_main_menu(lang: str):
     builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="🤖 Задать вопрос ИИ"))
-    builder.add(types.KeyboardButton(text="🎭 Режим"))
-    builder.add(types.KeyboardButton(text="📝 Очистить диалог"))
-    builder.add(types.KeyboardButton(text="ℹ Инфо"))
-    builder.adjust(2)
+    builder.add(types.KeyboardButton(text=t(lang, "btn_ask")))
+    builder.add(types.KeyboardButton(text=t(lang, "btn_mode")))
+    builder.add(types.KeyboardButton(text=t(lang, "btn_clear")))
+    builder.add(types.KeyboardButton(text=t(lang, "btn_info")))
+    builder.add(types.KeyboardButton(text=t(lang, "btn_settings")))
+    builder.adjust(2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 
-def answer_kb():
+def answer_kb(lang: str):
     b = InlineKeyboardBuilder()
-    b.button(text="🔄 Повторить", callback_data="re:regen")
-    b.button(text="➡️ Продолжить", callback_data="re:cont")
+    b.button(text=t(lang, "btn_regen"), callback_data="re:regen")
+    b.button(text=t(lang, "btn_cont"), callback_data="re:cont")
     b.adjust(2)
     return b.as_markup()
 
 
-def modes_kb(current: str):
+def modes_kb(current: str, lang: str):
     b = InlineKeyboardBuilder()
-    for key, (title, _) in MODES.items():
-        b.button(text=("✅ " if key == current else "") + title, callback_data=f"mode:{key}")
+    for key, m in MODES.items():
+        b.button(text=("✅ " if key == current else "") + m["title"][lang], callback_data=f"mode:{key}")
     b.adjust(1)
+    return b.as_markup()
+
+
+def settings_kb(lang: str, buttons_on: bool):
+    b = InlineKeyboardBuilder()
+    for code, name in LANGS.items():
+        b.button(text=("✅ " if code == lang else "") + name, callback_data=f"set:lang:{code}")
+    state = t(lang, "on" if buttons_on else "off")
+    b.button(text=t(lang, "btn_buttons", state=state), callback_data="set:btns")
+    b.adjust(2, 1)
     return b.as_markup()
 
 
@@ -422,7 +667,7 @@ class UserMiddleware(BaseMiddleware):
         if user and not user.is_bot:
             await touch_user(user)
             if user.id not in ADMIN_IDS and await is_banned(user.id):
-                await event.answer("🚫 Доступ к боту ограничен.")
+                await event.answer(t(await get_lang(user.id), "banned"))
                 return
         return await handler(event, data)
 
@@ -440,13 +685,15 @@ async def run_ai(
     image_url: str | None = None,
     regen: bool = False,
 ):
+    lang, buttons_on = await get_prefs(user_id)
+
     lock = user_locks.setdefault(user_id, asyncio.Lock())
     if lock.locked():
-        await bot.send_message(chat_id, "⏳ Подожди, я ещё отвечаю на предыдущий запрос.")
+        await bot.send_message(chat_id, t(lang, "busy"))
         return
 
     async with lock:
-        denied = await check_limit(user_id)
+        denied = await check_limit(user_id, lang)
         if denied:
             await bot.send_message(chat_id, denied)
             return
@@ -464,7 +711,7 @@ async def run_ai(
         await db.commit()
 
         mode = await get_mode(user_id)
-        prompt = MODES[mode][1] or await get_setting("system_prompt", DEFAULT_PROMPT)
+        prompt = await get_system_prompt(mode, lang)
         model = VISION_MODEL if image_url else await get_setting("model", MODEL)
 
         history = await load_history(user_id, MAX_HISTORY_LEN + (2 if regen else 0))
@@ -486,7 +733,7 @@ async def run_ai(
         ]
 
         await bot.send_chat_action(chat_id, "typing")
-        sent = await bot.send_message(chat_id, "🤔 Запрос обрабатывается...")
+        sent = await bot.send_message(chat_id, t(lang, "thinking"))
 
         # --- генерация ---
         try:
@@ -524,19 +771,19 @@ async def run_ai(
         except Exception as e:
             logging.exception("Ошибка при обращении к ИИ:")
             await log_error(user_id, f"{type(e).__name__}: {e}")
-            err = f"⚠️ Произошла ошибка при обращении к ИИ: {e}"
+            err = t(lang, "error", e=e)
             try:
                 await bot.edit_message_text(err[:4096], chat_id=chat_id, message_id=sent.message_id)
             except Exception:
                 await bot.send_message(chat_id, err[:4096])
             return
 
-        final = ai_text.strip() or "Извините, не удалось сформировать ответ. Попробуйте ещё раз!"
+        final = ai_text.strip() or t(lang, "empty")
 
-        # --- доставка с форматированием и кнопками ---
+        # --- доставка с форматированием (и кнопками, если включены в настройках) ---
         try:
             chunks = split_markdown(final)
-            kb = answer_kb()
+            kb = answer_kb(lang) if buttons_on else None
             await with_retry(
                 edit_md, chat_id, sent.message_id, chunks[0], kb if len(chunks) == 1 else None
             )
@@ -544,7 +791,8 @@ async def run_ai(
             for i, part in enumerate(chunks[1:], start=1):
                 msg = await with_retry(send_md, chat_id, part, kb if i == len(chunks) - 1 else None)
                 last_id = msg.message_id
-            last_kb_msg[user_id] = (chat_id, last_id)
+            if kb:
+                last_kb_msg[user_id] = (chat_id, last_id)
         except Exception:
             logging.exception("Не удалось доставить ответ")
             await log_error(user_id, "Не удалось доставить ответ в Telegram")
@@ -557,7 +805,7 @@ async def run_ai(
             last_image[user_id] = image_url
 
 
-# ================= АДМИН-ПАНЕЛЬ =================
+# ================= АДМИН-ПАНЕЛЬ (на русском) =================
 
 admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 admin_router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
@@ -595,10 +843,11 @@ def model_kb(current: str):
 
 def prompt_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ Изменить", callback_data="adm:prompt_edit")
-    b.button(text="♻️ Сбросить", callback_data="adm:prompt_reset")
+    b.button(text="✏️ RU", callback_data="adm:prompt_edit:ru")
+    b.button(text="✏️ EN", callback_data="adm:prompt_edit:en")
+    b.button(text="♻️ Сбросить оба", callback_data="adm:prompt_reset")
     b.button(text="⬅️ Назад", callback_data="adm:menu")
-    b.adjust(2, 1)
+    b.adjust(2, 1, 1)
     return b.as_markup()
 
 
@@ -623,10 +872,6 @@ def fmt_user(r) -> str:
     name = html.escape(r["first_name"] or "—")
     uname = f" @{html.escape(r['username'])}" if r["username"] else ""
     return f"{name}{uname}"
-
-
-def fmt_limit(n: int) -> str:
-    return str(n) if n > 0 else "без лимита"
 
 
 async def show(cb: types.CallbackQuery, text: str, kb=None):
@@ -669,6 +914,7 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
         req_day = await scalar("SELECT COUNT(*) FROM requests WHERE ts>?", (day,))
         req_all = await scalar("SELECT COUNT(*) FROM requests")
         err_day = await scalar("SELECT COUNT(*) FROM errors WHERE ts>?", (day,))
+        en_users = await scalar("SELECT COUNT(*) FROM users WHERE lang='en'")
         model = await get_setting("model", MODEL)
         cur = await db.execute(
             "SELECT id, first_name, username, msgs FROM users ORDER BY msgs DESC LIMIT 5"
@@ -680,7 +926,7 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
         await show(
             cb,
             "📊 <b>Статистика</b>\n\n"
-            f"👥 Пользователей: <b>{total}</b> (забанено: {banned})\n"
+            f"👥 Пользователей: <b>{total}</b> (забанено: {banned}, на English: {en_users})\n"
             f"🟢 Активны за 24ч: <b>{active}</b>\n"
             f"🆕 Новых за 24ч: <b>{new}</b>\n"
             f"💬 Запросов за 24ч: <b>{req_day}</b>\n"
@@ -740,22 +986,25 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
         await show(cb, "Пришли ID модели (как в личном кабинете провайдера).\n/cancel — отмена")
 
     elif action == "prompt":
-        current = await get_setting("system_prompt", DEFAULT_PROMPT)
+        ru = await get_setting("system_prompt", DEFAULT_PROMPT["ru"])
+        en = await get_setting("system_prompt_en", DEFAULT_PROMPT["en"])
         await show(
             cb,
-            "📝 <b>Системный промпт</b> (режим «Обычный»):\n\n"
-            f"<code>{html.escape(current[:3000])}</code>",
+            "📝 <b>Системный промпт</b> (режим «Обычный»)\n\n"
+            f"🇷🇺 <b>RU</b> (для русского интерфейса):\n<code>{html.escape(ru[:1500])}</code>\n\n"
+            f"🇬🇧 <b>EN</b> (для английского интерфейса):\n<code>{html.escape(en[:1500])}</code>",
             prompt_kb(),
         )
 
     elif action == "prompt_edit":
         await state.set_state(Admin.waiting)
-        await state.update_data(action="prompt")
-        await show(cb, "Пришли новый системный промпт.\n/cancel — отмена")
+        await state.update_data(action="prompt", plang=arg if arg in ("ru", "en") else "ru")
+        await show(cb, f"Пришли новый системный промпт ({arg.upper()}).\n/cancel — отмена")
 
     elif action == "prompt_reset":
         await del_setting("system_prompt")
-        await show(cb, "♻️ Промпт сброшен на стандартный.", prompt_kb())
+        await del_setting("system_prompt_en")
+        await show(cb, "♻️ Промпты сброшены на стандартные.", prompt_kb())
 
     elif action == "limits":
         per_min, per_day = await get_limits()
@@ -829,9 +1078,12 @@ async def admin_input(message: types.Message, state: FSMContext):
         )
 
     elif action == "prompt":
-        await set_setting("system_prompt", text)
+        plang = data.get("plang", "ru")
+        await set_setting("system_prompt" if plang == "ru" else "system_prompt_en", text)
         await state.clear()
-        await message.answer("✅ Системный промпт обновлён.", reply_markup=admin_kb())
+        await message.answer(
+            f"✅ Системный промпт ({plang.upper()}) обновлён.", reply_markup=admin_kb()
+        )
 
     elif action in ("limit_min", "limit_day"):
         if not text.isdigit():
@@ -878,45 +1130,49 @@ async def do_broadcast(text: str, admin_chat: int):
 
 @user_router.message(Command("myid"))
 async def cmd_myid(message: types.Message):
-    await message.answer(f"Твой Telegram ID: {message.from_user.id}")
+    lang = await get_lang(message.from_user.id)
+    await message.answer(t(lang, "myid", id=message.from_user.id))
 
 
 @user_router.message(Command("admin"))
 async def cmd_admin_denied(message: types.Message):
+    lang = await get_lang(message.from_user.id)
     if ADMIN_IDS:
-        await message.answer("⛔ Нет доступа.")
+        await message.answer(t(lang, "denied"))
     else:
-        await message.answer(
-            "Админ не настроен. Задай переменную окружения ADMIN_IDS "
-            f"со своим ID (твой ID: {message.from_user.id}) и перезапусти бота."
-        )
+        await message.answer(t(lang, "admin_unset", id=message.from_user.id))
 
 
 @user_router.message(Command("start"))
 async def cmd_start(message: types.Message):
+    lang = await get_lang(message.from_user.id)
     model = await get_setting("model", MODEL)
     await message.answer(
-        f"👋 Привет, {html.escape(message.from_user.first_name or 'друг')}!\n\n"
-        f"Я бот на базе <b>{html.escape(model)}</b> 🚀\n\n"
-        "Я помню историю диалога, умею разные режимы (🎭 Режим) и понимаю фото.\n"
-        "Используй меню или просто пиши мне текст!",
+        t(
+            lang,
+            "start",
+            name=html.escape(message.from_user.first_name or ("друг" if lang == "ru" else "friend")),
+            model=html.escape(model),
+        ),
         parse_mode="HTML",
-        reply_markup=get_main_menu(),
+        reply_markup=get_main_menu(lang),
     )
 
 
 @user_router.message(Command("clear", "reset"))
-@user_router.message(F.text == "📝 Очистить диалог")
+@user_router.message(F.text.in_(BTN_CLEAR))
 async def cmd_clear(message: types.Message):
+    lang = await get_lang(message.from_user.id)
     await clear_history(message.from_user.id)
-    await message.answer("🧹 История диалога очищена! Начнём с чистого листа.")
+    await message.answer(t(lang, "cleared"))
 
 
 @user_router.message(Command("mode"))
-@user_router.message(F.text == "🎭 Режим")
+@user_router.message(F.text.in_(BTN_MODE))
 async def cmd_mode(message: types.Message):
+    lang = await get_lang(message.from_user.id)
     current = await get_mode(message.from_user.id)
-    await message.answer("🎭 Выбери режим работы:", reply_markup=modes_kb(current))
+    await message.answer(t(lang, "mode_choose"), reply_markup=modes_kb(current, lang))
 
 
 @user_router.callback_query(F.data.startswith("mode:"))
@@ -925,85 +1181,128 @@ async def cb_mode(cb: types.CallbackQuery):
     if key not in MODES:
         await cb.answer()
         return
-    await set_mode(cb.from_user.id, key)
+    lang = await get_lang(cb.from_user.id)
+    await set_user_field(cb.from_user.id, "mode", key)
     await clear_history(cb.from_user.id)  # чтобы контекст прошлого режима не мешал
     try:
         await cb.message.edit_text(
-            f"✅ Режим: {MODES[key][0]}\nДиалог очищен, можно писать.",
-            reply_markup=modes_kb(key),
+            t(lang, "mode_set", mode=MODES[key]["title"][lang]),
+            reply_markup=modes_kb(key, lang),
         )
     except TelegramBadRequest:
         pass
     await cb.answer()
 
 
-@user_router.message(F.text == "ℹ Инфо")
+@user_router.message(Command("settings"))
+@user_router.message(F.text.in_(BTN_SETTINGS))
+async def cmd_settings(message: types.Message):
+    lang, buttons_on = await get_prefs(message.from_user.id)
+    await message.answer(
+        t(lang, "settings"), parse_mode="HTML", reply_markup=settings_kb(lang, buttons_on)
+    )
+
+
+@user_router.callback_query(F.data.startswith("set:"))
+async def cb_settings(cb: types.CallbackQuery):
+    uid = cb.from_user.id
+    parts = cb.data.split(":")
+    lang, buttons_on = await get_prefs(uid)
+
+    if parts[1] == "lang" and len(parts) > 2 and parts[2] in LANGS:
+        if parts[2] != lang:
+            lang = parts[2]
+            await set_user_field(uid, "lang", lang)
+            # у reply-клавиатуры нельзя поменять текст кнопок — присылаем новую
+            await bot.send_message(
+                cb.message.chat.id, t(lang, "lang_changed"), reply_markup=get_main_menu(lang)
+            )
+    elif parts[1] == "btns":
+        buttons_on = not buttons_on
+        await set_user_field(uid, "buttons", 1 if buttons_on else 0)
+
+    try:
+        await cb.message.edit_text(
+            t(lang, "settings"), parse_mode="HTML", reply_markup=settings_kb(lang, buttons_on)
+        )
+    except TelegramBadRequest:
+        pass
+    await cb.answer()
+
+
+@user_router.message(F.text.in_(BTN_INFO))
 async def cmd_info(message: types.Message):
+    lang = await get_lang(message.from_user.id)
     model = await get_setting("model", MODEL)
     mode = await get_mode(message.from_user.id)
     per_min, per_day = await get_limits()
+    limits = t(lang, "limits_fmt", pm=fmt_limit(per_min, lang), pd=fmt_limit(per_day, lang))
     await message.answer(
-        "ℹ <b>Информация о боте:</b>\n"
-        f"• <b>Модель:</b> {html.escape(model)}\n"
-        f"• <b>Режим:</b> {MODES[mode][0]}\n"
-        f"• <b>Память:</b> последние {MAX_HISTORY_LEN} сообщений\n"
-        f"• <b>Лимиты:</b> {fmt_limit(per_min)}/мин, {fmt_limit(per_day)}/сутки\n"
-        "• <b>Фото:</b> поддерживаются",
+        t(
+            lang,
+            "info",
+            model=html.escape(model),
+            mode=MODES[mode]["title"][lang],
+            n=MAX_HISTORY_LEN,
+            limits=limits,
+        ),
         parse_mode="HTML",
     )
 
 
-@user_router.message(F.text == "🤖 Задать вопрос ИИ")
+@user_router.message(F.text.in_(BTN_ASK))
 async def cmd_ask(message: types.Message):
-    await message.answer("💬 Задавай любой вопрос или пришли фото, я готов!")
+    lang = await get_lang(message.from_user.id)
+    await message.answer(t(lang, "ask"))
 
 
 @user_router.callback_query(F.data.in_({"re:regen", "re:cont"}))
 async def cb_retry(cb: types.CallbackQuery):
     uid = cb.from_user.id
+    lang = await get_lang(uid)
     hist = await load_history(uid)
     if len(hist) < 2 or hist[-1]["role"] != "assistant" or hist[-2]["role"] != "user":
-        await cb.answer("Нечего повторять", show_alert=True)
+        await cb.answer(t(lang, "nothing_retry"), show_alert=True)
         return
 
     if cb.data == "re:regen":
         q = hist[-2]["content"]
         image = None
-        if q.startswith(PHOTO_TAG):
+        tag = next((tg for tg in PHOTO_TAGS if q.startswith(tg)), None)
+        if tag:
             image = last_image.get(uid)
             if not image:
-                await cb.answer("Фото больше недоступно — отправь его заново.", show_alert=True)
+                await cb.answer(t(lang, "photo_gone"), show_alert=True)
                 return
-            q = q[len(PHOTO_TAG):].strip()
+            q = q[len(tag):].strip()
         await cb.answer()
         await run_ai(cb.message.chat.id, uid, q, image_url=image, regen=True)
     else:
         await cb.answer()
-        await run_ai(cb.message.chat.id, uid, CONTINUE_TEXT)
+        await run_ai(cb.message.chat.id, uid, t(lang, "continue_text"))
 
 
 @user_router.message(F.photo)
 async def handle_photo(message: types.Message):
+    lang = await get_lang(message.from_user.id)
     try:
         buf = await bot.download(message.photo[-1])
         data = buf.read()
     except Exception as e:
-        await message.answer(f"⚠️ Не удалось загрузить фото: {e}")
+        await message.answer(t(lang, "photo_fail", e=e))
         return
     url = "data:image/jpeg;base64," + base64.b64encode(data).decode()
-    caption = (message.caption or "").strip() or "Опиши, что на изображении."
+    caption = (message.caption or "").strip() or t(lang, "photo_caption")
     await run_ai(message.chat.id, message.from_user.id, caption, image_url=url)
 
 
 @user_router.message(F.voice)
 async def handle_voice(message: types.Message):
-    if not STT_MODEL:
-        await message.answer(
-            "🎤 Голосовые пока не поддерживаются: у используемой модели нет распознавания речи. "
-            "Отправь вопрос текстом или фото."
-        )
-        return
     uid = message.from_user.id
+    lang = await get_lang(uid)
+    if not STT_MODEL:
+        await message.answer(t(lang, "voice_off"))
+        return
     try:
         buf = await bot.download(message.voice)
         tr = await client.audio.transcriptions.create(
@@ -1013,12 +1312,12 @@ async def handle_voice(message: types.Message):
     except Exception as e:
         logging.exception("Ошибка распознавания голоса:")
         await log_error(uid, f"STT {type(e).__name__}: {e}")
-        await message.answer(f"⚠️ Не удалось распознать голосовое: {e}")
+        await message.answer(t(lang, "voice_fail", e=e))
         return
     if not text:
-        await message.answer("Не удалось разобрать речь, попробуй ещё раз.")
+        await message.answer(t(lang, "voice_empty"))
         return
-    await message.answer(f"🎤 Распознано: {text[:3500]}")
+    await message.answer(t(lang, "voice_ok", text=text[:3500]))
     await run_ai(message.chat.id, uid, text)
 
 
