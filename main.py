@@ -991,7 +991,7 @@ async def cmd_info(message: types.Message):
         f"• <b>Режим:</b> {MODES[mode][0]}\n"
         f"• <b>Память:</b> последние {MAX_HISTORY_LEN} сообщений\n"
         f"• <b>Лимиты:</b> {fmt_limit(per_min)}/мин, {fmt_limit(per_day)}/сутки\n"
-        "• <b>Фото:</b> поддерживаются"
+        "• <b>Фото:</b> поддерживаются\n"
         "• <b>Создатель</b> @ashoton",
         parse_mode="HTML",
     )
