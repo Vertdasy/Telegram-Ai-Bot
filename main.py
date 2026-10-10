@@ -214,7 +214,8 @@ async def init_db():
             last_seen INTEGER,
             msgs INTEGER DEFAULT 0,
             banned INTEGER DEFAULT 0,
-            mode TEXT DEFAULT 'default'
+            mode TEXT DEFAULT 'default',
+            buttons INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS history(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,8 +236,11 @@ async def init_db():
     )
     # миграция для баз, созданных прошлой версией бота
     cur = await db.execute("PRAGMA table_info(users)")
-    if "mode" not in [r["name"] for r in await cur.fetchall()]:
+    cols = {r["name"] for r in await cur.fetchall()}
+    if "mode" not in cols:
         await db.execute("ALTER TABLE users ADD COLUMN mode TEXT DEFAULT 'default'")
+    if "buttons" not in cols:
+        await db.execute("ALTER TABLE users ADD COLUMN buttons INTEGER DEFAULT 0")
     await db.commit()
     logging.info(f"База данных: {DB_PATH}")
 
@@ -289,6 +293,15 @@ async def get_mode(user_id: int) -> str:
 
 async def set_mode(user_id: int, mode: str):
     await db.execute("UPDATE users SET mode=? WHERE id=?", (mode, user_id))
+    await db.commit()
+
+
+async def get_buttons(user_id: int) -> bool:
+    return bool(await scalar("SELECT buttons FROM users WHERE id=?", (user_id,)))
+
+
+async def set_buttons(user_id: int, enabled: bool):
+    await db.execute("UPDATE users SET buttons=? WHERE id=?", (1 if enabled else 0, user_id))
     await db.commit()
 
 
@@ -394,6 +407,7 @@ def get_main_menu():
     builder.add(types.KeyboardButton(text="🎭 Режим"))
     builder.add(types.KeyboardButton(text="📝 Очистить диалог"))
     builder.add(types.KeyboardButton(text="ℹ Инфо"))
+    builder.add(types.KeyboardButton(text="⚙️ Настройки"))
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
@@ -536,7 +550,8 @@ async def run_ai(
         # --- доставка с форматированием и кнопками ---
         try:
             chunks = split_markdown(final)
-            kb = answer_kb()
+            buttons_on = await get_buttons(user_id)
+            kb = answer_kb() if buttons_on else None
             await with_retry(
                 edit_md, chat_id, sent.message_id, chunks[0], kb if len(chunks) == 1 else None
             )
@@ -544,7 +559,8 @@ async def run_ai(
             for i, part in enumerate(chunks[1:], start=1):
                 msg = await with_retry(send_md, chat_id, part, kb if i == len(chunks) - 1 else None)
                 last_id = msg.message_id
-            last_kb_msg[user_id] = (chat_id, last_id)
+            if buttons_on:
+                last_kb_msg[user_id] = (chat_id, last_id)
         except Exception:
             logging.exception("Не удалось доставить ответ")
             await log_error(user_id, "Не удалось доставить ответ в Telegram")
@@ -937,6 +953,33 @@ async def cb_mode(cb: types.CallbackQuery):
     await cb.answer()
 
 
+@user_router.message(Command("settings"))
+@user_router.message(F.text == "⚙️ Настройки")
+async def cmd_settings(message: types.Message):
+    buttons_on = await get_buttons(message.from_user.id)
+    state = "вкл ✅" if buttons_on else "выкл ❌"
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"🔘 Кнопки под ответом: {state}", callback_data="set:btns")
+    kb.adjust(1)
+    await message.answer("⚙️ <b>Настройки</b>\n\n🔘 Кнопки «Повторить» и «Продолжить» под ответами",
+                         parse_mode="HTML", reply_markup=kb.as_markup())
+
+
+@user_router.callback_query(F.data == "set:btns")
+async def cb_settings_buttons(cb: types.CallbackQuery):
+    enabled = not await get_buttons(cb.from_user.id)
+    await set_buttons(cb.from_user.id, enabled)
+    state = "вкл ✅" if enabled else "выкл ❌"
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"🔘 Кнопки под ответом: {state}", callback_data="set:btns")
+    kb.adjust(1)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=kb.as_markup())
+    except TelegramBadRequest:
+        pass
+    await cb.answer()
+
+
 @user_router.message(F.text == "ℹ Инфо")
 async def cmd_info(message: types.Message):
     model = await get_setting("model", MODEL)
@@ -948,8 +991,7 @@ async def cmd_info(message: types.Message):
         f"• <b>Режим:</b> {MODES[mode][0]}\n"
         f"• <b>Память:</b> последние {MAX_HISTORY_LEN} сообщений\n"
         f"• <b>Лимиты:</b> {fmt_limit(per_min)}/мин, {fmt_limit(per_day)}/сутки\n"
-        "• <b>Фото:</b> поддерживаются"
-        "• <b>Создатель:</b> @ashoton",
+        "• <b>Фото:</b> поддерживаются",
         parse_mode="HTML",
     )
 
