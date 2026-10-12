@@ -158,6 +158,8 @@ TEXTS = {
         "btn_clear": "📝 Очистить диалог",
         "btn_info": "ℹ Инфо",
         "btn_settings": "⚙️ Настройки",
+        "btn_invite": "🎁 Пригласить",
+        "menu_updated": "🎁 В меню появилась кнопка «Пригласить»: зови друзей и получай бонусные запросы.",
         "banned": "🚫 Доступ к боту ограничен.",
         "maintenance": "🔧 Бот на техническом обслуживании. Загляни чуть позже.",
         # --- приветствие и справка ---
@@ -362,6 +364,8 @@ TEXTS = {
         "btn_clear": "📝 Clear chat",
         "btn_info": "ℹ Info",
         "btn_settings": "⚙️ Settings",
+        "btn_invite": "🎁 Invite",
+        "menu_updated": "🎁 The menu now has an “Invite” button: invite friends and get bonus requests.",
         "banned": "🚫 Access to the bot is restricted.",
         "maintenance": "🔧 The bot is under maintenance. Please come back a bit later.",
         "start": (
@@ -683,6 +687,8 @@ BTN_MODE = all_langs("btn_mode")
 BTN_CLEAR = all_langs("btn_clear")
 BTN_INFO = all_langs("btn_info")
 BTN_SETTINGS = all_langs("btn_settings")
+BTN_INVITE = all_langs("btn_invite")
+MENU_VERSION = 2   # номер версии нижнего меню: при смене все пользователи один раз получают обновлённую клавиатуру
 
 
 def make_timeout():
@@ -851,7 +857,8 @@ async def init_db():
             ref_by INTEGER,
             ref_paid INTEGER DEFAULT 0,
             bonus INTEGER DEFAULT 0,
-            src TEXT
+            src TEXT,
+            menu_ver INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS history(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -900,6 +907,7 @@ async def init_db():
         ("ref_paid", "INTEGER DEFAULT 0"),
         ("bonus", "INTEGER DEFAULT 0"),
         ("src", "TEXT"),
+        ("menu_ver", "INTEGER DEFAULT 0"),
     ):
         if name not in cols:
             await db.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
@@ -940,10 +948,10 @@ async def del_setting(key: str):
 async def touch_user(user: types.User):
     now = int(time.time())
     await db.execute(
-        "INSERT INTO users(id, username, first_name, joined, last_seen) VALUES(?,?,?,?,?) "
+        "INSERT INTO users(id, username, first_name, joined, last_seen, menu_ver) VALUES(?,?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET username=excluded.username, "
         "first_name=excluded.first_name, last_seen=excluded.last_seen",
-        (user.id, user.username, user.first_name, now, now),
+        (user.id, user.username, user.first_name, now, now, MENU_VERSION),
     )
     await db.commit()
 
@@ -1255,7 +1263,8 @@ def get_main_menu(lang: str):
     builder.add(types.KeyboardButton(text=t(lang, "btn_clear")))
     builder.add(types.KeyboardButton(text=t(lang, "btn_info")))
     builder.add(types.KeyboardButton(text=t(lang, "btn_settings")))
-    builder.adjust(2, 2, 1)
+    builder.add(types.KeyboardButton(text=t(lang, "btn_invite")))
+    builder.adjust(2, 2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -1334,6 +1343,24 @@ def clear_kb(lang: str, has_pinned: bool):
 
 # ----------------- MIDDLEWARE: регистрация, бан, техработы -----------------
 
+async def refresh_menu(event, user):
+    """Один раз присылает старым пользователям обновлённую клавиатуру (reply-клавиатуру нельзя обновить «на месте»)."""
+    if hasattr(event, "data") or not hasattr(event, "chat"):
+        return  # только для обычных сообщений, не для нажатий inline-кнопок
+    try:
+        ver = await scalar("SELECT COALESCE(menu_ver, 0) FROM users WHERE id=?", (user.id,))
+        if ver >= MENU_VERSION:
+            return
+        await db.execute("UPDATE users SET menu_ver=? WHERE id=?", (MENU_VERSION, user.id))
+        await db.commit()
+        if (getattr(event, "text", None) or "").startswith("/start"):
+            return  # /start и так присылает новое меню
+        lang = await get_lang(user.id)
+        await event.answer(t(lang, "menu_updated"), reply_markup=get_main_menu(lang))
+    except Exception:
+        logging.exception("Не удалось обновить меню (не критично)")
+
+
 class UserMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         user = getattr(event, "from_user", None)
@@ -1346,6 +1373,7 @@ class UserMiddleware(BaseMiddleware):
                 if STATE["maintenance"]:
                     await event.answer(t(await get_lang(user.id), "maintenance"))
                     return
+            await refresh_menu(event, user)
         return await handler(event, data)
 
 
@@ -2706,6 +2734,7 @@ async def cmd_start(message: types.Message, command: CommandObject):
 
 
 @user_router.message(Command("invite"))
+@user_router.message(F.text.in_(BTN_INVITE))
 async def cmd_invite(message: types.Message):
     uid = message.from_user.id
     lang = await get_lang(uid)
