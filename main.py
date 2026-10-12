@@ -1590,24 +1590,23 @@ async def cb_settings(cb: types.CallbackQuery):
         pass
     await cb.answer()
 
-
 @user_router.message(Command("myprompt"))
 async def cmd_myprompt(message: types.Message, command: CommandObject):
     uid = message.from_user.id
     lang = await get_lang(uid)
-    arg = (command.args or "").strip(            )
-            if not arg:
-                current = await get_custom_prompt(uid)
-                await message.answer(
-                    t(lang, "myprompt_help", current=html.escape(current) if current else t(lang, "none")),
-                    parse_mode="HTML",
-                )
-            elif arg.lower() in ("reset", "clear", "off", "сброс"):
-                await set_user_field(uid, "custom_prompt", None)
-                await message.answer(t(lang, "myprompt_reset"))
-            else:
-                await set_user_field(uid, "custom_prompt", arg[:CUSTOM_PROMPT_MAX])
-                await message.answer(t(lang, "myprompt_saved"))
+    arg = (command.args or "").strip()
+    if not arg:
+        current = await get_custom_prompt(uid)
+        await message.answer(
+            t(lang, "myprompt_help", current=html.escape(current) if current else t(lang, "none")),
+            parse_mode="HTML",
+        )
+    elif arg.lower() in ("reset", "clear", "off", "сброс"):
+        await set_user_field(uid, "custom_prompt", None)
+        await message.answer(t(lang, "myprompt_reset"))
+    else:
+        await set_user_field(uid, "custom_prompt", arg[:CUSTOM_PROMPT_MAX])
+        await message.answer(t(lang, "myprompt_saved"))
 
 
 @user_router.message(F.text.in_(BTN_INFO))
