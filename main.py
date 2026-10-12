@@ -7,16 +7,17 @@ import tempfile
 import time
 import html
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
+import aiohttp
 import aiosqlite
-import httpx
 import openai
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware, types
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile
+from aiogram.types import BotCommand, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from openai import AsyncOpenAI
 
@@ -54,7 +55,7 @@ VISION_MODEL = os.getenv("VISION_MODEL", "deepseek-v4.1-flash")
 STT_MODEL = os.getenv("STT_MODEL", "")
 
 # --- скорость и надёжность ---
-# Уровень «рассуждения» модели для режимов «Быстро» / «Вдумчиво»:
+# Уровень «рассуждения» модели для стилей «Быстро» / «Вдумчиво»:
 # default (не передавать параметр), low, medium, high, xhigh. Меняется в админке: ⚡ Скорость.
 EFFORT_FAST = os.getenv("EFFORT_FAST", "low")
 EFFORT_THINK = os.getenv("EFFORT_THINK", "high")
@@ -63,7 +64,35 @@ FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "deepseek-v4-flash")
 AI_TIMEOUT = env_float("AI_TIMEOUT", 150.0)         # макс. пауза без данных от модели, сек
 TOTAL_TIMEOUT = env_float("TOTAL_TIMEOUT", 300.0)   # макс. общее время одного запроса, сек
 MAX_TOKENS = env_int("MAX_TOKENS", 0)               # 0 = без ограничения длины ответа
-HISTORY_CHARS = env_int("HISTORY_CHARS", 8000)      # лимит символов истории в запросе (меньше = быстрее)
+
+# --- память диалога ---
+# Бот хранит И вопросы пользователя, И ответы ИИ (каждое — отдельное «сообщение»),
+# поэтому 30 сообщений = 15 пар «вопрос — ответ». Размер меняется в админке: 🧮 Память.
+MEMORY_DEFAULT = env_int("MEMORY_LEN", 30)
+MEMORY_MIN, MEMORY_MAX = 2, 200
+# Лимит объёма истории в одном запросе (символов). Если диалог длиннее — самые старые
+# сообщения не отправляются модели (так ответы быстрее). Меняется в админке.
+HISTORY_CHARS = env_int("HISTORY_CHARS", 40000)
+
+# --- сохранённые сообщения («📌 Сохранить») ---
+PINNED_MAX = env_int("PINNED_MAX", 10)              # сколько сообщений можно сохранить
+PINNED_ITEM_CHARS = 4000                            # макс. длина одного сохранённого сообщения
+PINNED_TOTAL_CHARS = 8000                           # сколько символов сохранённого уходит модели
+ANSWERS_KEEP = 40                                   # сколько последних ответов помнить для кнопки «Сохранить»
+
+# --- фото и очередь ---
+MAX_IMAGES = env_int("MAX_IMAGES", 6)               # макс. фото в одном сообщении/альбоме
+ALBUM_WAIT = env_float("ALBUM_WAIT", 1.2)           # сколько ждать остальные фото альбома, сек
+MAX_QUEUE = env_int("MAX_QUEUE", 2)                 # сколько запросов одного человека могут ждать очереди
+
+# --- реклама AdsGram (https://adsgram.ai) ---
+# ID рекламного блока типа «Бот» из кабинета AdsGram: можно «bot-53426» или просто 53426.
+# Пока переменная пустая — реклама полностью выключена.
+ADSGRAM_BLOCK_ID = re.sub(r"\D", "", os.getenv("ADSGRAM_BLOCK_ID", ""))
+ADSGRAM_TOKEN = os.getenv("ADSGRAM_TOKEN", "")      # токен аккаунта (если AdsGram его требует; профиль в кабинете)
+ADS_EVERY = env_int("ADS_EVERY", 6)                 # показывать рекламу после каждого N-го ответа (меняется в админке)
+ADS_MIN_GAP = env_int("ADS_MIN_GAP", 600)           # не чаще одного раза в N секунд на человека
+ADS_API = "https://api.adsgram.ai/advbot"
 
 # ID админов через запятую, например: ADMIN_IDS=123456789 (свой ID покажет команда /myid)
 ADMIN_IDS = {
@@ -86,12 +115,17 @@ RATE_PER_DAY = env_int("RATE_PER_DAY", 100)
 DB_PATH = os.getenv("DB_PATH") or ("/data/bot.db" if os.path.isdir("/data") else "bot.db")
 TZ_HOURS = env_int("TZ_HOURS", 4)                   # часовой пояс для времени в админке
 
-MAX_HISTORY_LEN = 10                                # сколько последних сообщений помнить
 EDIT_INTERVAL = env_float("EDIT_INTERVAL", 1.0)     # как часто обновлять сообщение при стриминге (сек)
 CHUNK = 3500                                        # размер куска текста для одного сообщения Telegram
-PHOTO_TAG = "[Photo]"                               # пометка фото-вопроса в истории
-PHOTO_TAGS = ("[Photo]", "[Фото]")                  # второй вариант — для баз прошлых версий
 CUSTOM_PROMPT_MAX = 1000                            # макс. длина личных инструкций пользователя
+
+# Пометка фото-вопроса в истории: «[Photo]» или «[Photo x3]» (старый вариант «[Фото]» тоже понимаем)
+PHOTO_RE = re.compile(r"^\[(?:Photo|Фото)(?: x(\d+))?\]\s*")
+
+
+def photo_tag(n: int) -> str:
+    return "[Photo]" if n <= 1 else f"[Photo x{n}]"
+
 
 EFFORTS = ("default", "low", "medium", "high", "xhigh")
 EFFORT_LABEL = {
@@ -112,6 +146,7 @@ LANGS = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
 
 TEXTS = {
     "ru": {
+        # --- кнопки главного меню (тексты не менять: по ним бот узнаёт нажатия) ---
         "btn_ask": "🤖 Задать вопрос ИИ",
         "btn_mode": "🎭 Режим",
         "btn_clear": "📝 Очистить диалог",
@@ -119,29 +154,87 @@ TEXTS = {
         "btn_settings": "⚙️ Настройки",
         "banned": "🚫 Доступ к боту ограничен.",
         "maintenance": "🔧 Бот на техническом обслуживании. Загляни чуть позже.",
+        # --- приветствие и справка ---
         "start": (
-            "👋 Привет, {name}!\n\n"
-            "Я бот на базе <b>{model}</b> 🚀\n\n"
-            "Я помню историю диалога, умею разные режимы (🎭 Режим) и понимаю фото.\n"
-            "Используй меню или просто пиши мне текст!"
+            "👋 <b>Привет, {name}!</b>\n\n"
+            "Я — ИИ-ассистент на базе <b>{model}</b>. Отвечаю на вопросы, пишу и правлю тексты, "
+            "помогаю с кодом, перевожу и разбираю изображения.\n\n"
+            "✨ <b>Что я умею</b>\n"
+            "• 💬 Помню наш разговор — последние {n} сообщений\n"
+            "• 🎭 Меняю роль: переводчик, программист, редактор — кнопка «Режим»\n"
+            "• 🖼 Смотрю фото и альбомы — до {k} изображений за раз\n"
+            "• 📌 Запоминаю важное: включи кнопку «Сохранить» в настройках\n\n"
+            "🚀 <b>С чего начать</b>\n"
+            "Просто напиши вопрос или пришли фото. Меню внизу — режимы, настройки и очистка диалога, "
+            "полный список команд — /help"
         ),
-        "cleared": "🧹 История диалога очищена! Начнём с чистого листа.",
-        "ask": "💬 Задавай любой вопрос или пришли фото, я готов!",
-        "mode_choose": "🎭 Выбери режим работы:",
-        "mode_set": "✅ Режим: {mode}\nДиалог очищен, можно писать.",
+        "help": (
+            "❓ <b>Справка</b>\n\n"
+            "Пиши вопросы обычным текстом и присылай фото (можно несколько сразу). "
+            "Пока ИИ отвечает, ответ можно остановить кнопкой «⏹ Стоп».\n\n"
+            "<b>Команды</b>\n"
+            "/mode — выбрать режим (роль ИИ)\n"
+            "/settings — язык, кнопки под ответом, стиль ответа\n"
+            "/saved — сохранённые сообщения\n"
+            "/export — выгрузить диалог файлом\n"
+            "/clear — очистить диалог (с подтверждением)\n"
+            "/myprompt — свои инструкции для ИИ\n"
+            "/myid — твой Telegram ID"
+        ),
+        "ask": "💬 Задавай любой вопрос или пришли фото — можно сразу несколько. Я готов!",
+        # --- режимы ---
+        "mode_choose": (
+            "🎭 <b>Выбери режим</b>\n\n{list}\n\n"
+            "При смене режима диалог сбрасывается, а сохранённые сообщения остаются."
+        ),
+        "mode_set": (
+            "✅ <b>Режим: {mode}</b>\n{desc}\n\n"
+            "🧹 Прошлый диалог сброшен — он не повлияет на новый режим.{pinned}\n\n"
+            "Можно писать!"
+        ),
+        "mode_pinned": "\n📌 Сохранённые сообщения ({n}) остались в памяти.",
+        "mode_same": "Этот режим уже включён",
+        # --- инфо ---
         "info": (
-            "ℹ <b>Информация о боте:</b>\n"
-            "• <b>Модель:</b> {model}\n"
-            "• <b>Режим:</b> {mode}\n"
-            "• <b>Режим ответа:</b> {think}\n"
-            "• <b>Память:</b> последние {n} сообщений\n"
-            "• <b>Лимиты:</b> {limits}\n"
-            "• <b>Фото:</b> поддерживаются\n"
-            "• <b>Создатель:</b> @ashoton"
+            "ℹ <b>О боте</b>\n\n"
+            "🧠 <b>Модель:</b> {model}\n"
+            "🎭 <b>Режим:</b> {mode}\n"
+            "⚡ <b>Стиль ответа:</b> {think}\n"
+            "🌐 <b>Язык:</b> {language}\n"
+            "💾 <b>Память:</b> {used} из {n} сообщений (вопросы и ответы вместе, ≈{pairs} пар)\n"
+            "📌 <b>Сохранено:</b> {pinned}\n"
+            "🖼 <b>Фото:</b> до {k} за раз\n"
+            "⏱ <b>Лимиты:</b> {limits}\n"
+            "👤 <b>Создатель:</b> @ashoton"
         ),
-        "limits_fmt": "{pm}/мин, {pd}/сутки",
+        "limits_fmt": "{pm}/мин, {pd}/сутки (за 24 ч использовано: {u})",
+        "limits_admin": "без ограничений (админ)",
         "unlimited": "без лимита",
-        "busy": "⏳ Подожди, я ещё отвечаю на предыдущий запрос.",
+        # --- очистка ---
+        "clear_confirm": (
+            "🧹 <b>Очистить диалог?</b>\n"
+            "В памяти {n} сообщений — они будут удалены, и ИИ забудет контекст разговора."
+        ),
+        "clear_confirm_pinned": (
+            "🧹 <b>Очистить диалог?</b>\n"
+            "В памяти {n} сообщений, и ещё 📌 сохранено: {p}.\n"
+            "Можно очистить всё или оставить только сохранённые."
+        ),
+        "btn_clear_yes": "🧹 Да, очистить",
+        "btn_clear_all": "🧹 Очистить всё",
+        "btn_clear_keep": "📌 Оставить сохранённые",
+        "btn_cancel": "✖ Отмена",
+        "cleared": "🧹 История диалога очищена! Начнём с чистого листа.",
+        "cleared_keep": "🧹 Диалог очищен. Сохранённые сообщения ({p}) остались в памяти.",
+        "clear_cancelled": "Отменено — диалог остался как был.",
+        "clear_empty": "Память уже пуста — очищать нечего.",
+        # --- очередь, стоп, ожидание ---
+        "busy": "⏳ Подожди, я ещё отвечаю на предыдущие запросы.",
+        "queued": "⏳ Предыдущий запрос ещё обрабатывается — отвечу следом.",
+        "btn_stop": "⏹ Стоп",
+        "stopped": "⏹ Остановлено.",
+        "stopped_note": "⏹ Ответ остановлен.",
+        "stop_none": "Сейчас нечего останавливать",
         "limit_min": "⏳ Слишком часто: не больше {n} запросов в минуту. Подожди {wait}.",
         "limit_day": "📅 Дневной лимит ({n} запросов) исчерпан. Новый запрос будет доступен через {wait}.",
         "wait_sec": "{n} сек.",
@@ -160,12 +253,34 @@ TEXTS = {
         "err_conn": "📡 Не удалось связаться с сервисом ИИ. Попробуй ещё раз чуть позже.",
         "err_status": "⚠️ Сервис ИИ вернул ошибку (код {code}). Попробуй ещё раз.",
         "empty": "Извините, не удалось сформировать ответ. Попробуйте ещё раз!",
+        # --- кнопки под ответом ---
         "btn_regen": "🔄 Повторить",
         "btn_cont": "➡️ Продолжить",
         "nothing_retry": "Нечего повторять",
+        "btn_save": "📌 Сохранить",
+        "btn_saved": "✅ Сохранено",
+        "save_ok": "📌 Сохранено в память. Список — /saved",
+        "save_dup": "Это сообщение уже сохранено",
+        "save_limit": "Можно хранить до {n} сообщений. Удали лишние через /saved",
+        "save_gone": "Это сообщение уже нельзя сохранить — диалог был очищен.",
+        "saved_title": (
+            "📌 <b>Сохранённые сообщения</b> ({n}/{max})\n"
+            "Они остаются в памяти ИИ, пока ты не очистишь историю.\n\n{items}"
+        ),
+        "saved_empty": (
+            "📌 Сохранённых сообщений пока нет.\n\n"
+            "Включи кнопку «Сохранить» в ⚙️ Настройках — она появится под ответами ИИ."
+        ),
+        "btn_del_all": "🗑 Удалить все",
+        "saved_deleted": "Удалено",
+        "pinned_hdr": "Сообщения, которые пользователь сохранил как важный контекст (учитывай их в ответах):",
+        # --- фото ---
         "photo_gone": "Фото больше недоступно — отправь его заново.",
         "photo_fail": "⚠️ Не удалось загрузить фото: {e}",
         "photo_caption": "Опиши, что на изображении.",
+        "photo_caption_multi": "Опиши, что на этих изображениях.",
+        "album_limit": "📎 Взял первые {n} фото — это максимум за один раз.",
+        # --- голос ---
         "voice_off": (
             "🎤 Голосовые пока не поддерживаются: у используемой модели нет распознавания речи. "
             "Отправь вопрос текстом или фото."
@@ -173,21 +288,26 @@ TEXTS = {
         "voice_fail": "⚠️ Не удалось распознать голосовое: {e}",
         "voice_empty": "Не удалось разобрать речь, попробуй ещё раз.",
         "voice_ok": "🎤 Распознано: {text}",
+        # --- настройки ---
         "settings": (
             "⚙️ <b>Настройки</b>\n\n"
-            "🌐 Язык интерфейса и ответов ИИ\n"
-            "🔘 Кнопки «Повторить» и «Продолжить» под ответами\n"
-            "🧠 Режим ответа: <b>⚡ Быстро</b> — ответ сразу, <b>🧠 Вдумчиво</b> — модель рассуждает "
-            "дольше (точнее на сложных задачах)\n"
-            "📝 Свои инструкции для ИИ: /myprompt"
+            "🌐 <b>Язык</b> — интерфейс бота и ответы ИИ.\n"
+            "🔁 <b>Повторить / Продолжить</b> — кнопки под ответом.\n"
+            "📌 <b>Сохранить</b> — кнопка под ответом: закрепляет сообщение в памяти, пока ты не очистишь "
+            "историю (список — /saved).\n"
+            "🧠 <b>Стиль ответа</b> — ⚡ Быстро: отвечает сразу; 🧠 Вдумчиво: рассуждает дольше, точнее "
+            "в сложных задачах.\n"
+            "✏️ Свои инструкции для ИИ — /myprompt"
         ),
-        "btn_buttons": "🔘 Кнопки под ответом: {state}",
-        "btn_think": "🧠 Режим ответа: {state}",
+        "btn_buttons": "🔁 Повторить/Продолжить: {state}",
+        "btn_savebtn": "📌 Кнопка «Сохранить»: {state}",
+        "btn_think": "🧠 Стиль ответа: {state}",
         "think_fast": "⚡ Быстро",
         "think_deep": "🧠 Вдумчиво",
         "on": "вкл ✅",
         "off": "выкл ❌",
         "lang_changed": "✅ Язык: Русский",
+        # --- прочее ---
         "myid": "Твой Telegram ID: {id}",
         "denied": "⛔ Нет доступа.",
         "admin_unset": (
@@ -210,6 +330,11 @@ TEXTS = {
         "myprompt_saved": "✅ Инструкции сохранены.",
         "myprompt_reset": "♻️ Инструкции сброшены.",
         "none": "не задано",
+        "export_empty": "Нечего выгружать — диалог пуст.",
+        "export_caption": "📄 Диалог: {n} сообщений (бот хранит только последние {m}).",
+        "export_you": "Ты",
+        "export_ai": "ИИ",
+        "export_saved": "Сохранённые сообщения",
     },
     "en": {
         "btn_ask": "🤖 Ask the AI",
@@ -220,28 +345,81 @@ TEXTS = {
         "banned": "🚫 Access to the bot is restricted.",
         "maintenance": "🔧 The bot is under maintenance. Please come back a bit later.",
         "start": (
-            "👋 Hi, {name}!\n\n"
-            "I'm a bot powered by <b>{model}</b> 🚀\n\n"
-            "I remember our conversation, have different modes (🎭 Mode) and understand photos.\n"
-            "Use the menu or just send me a message!"
+            "👋 <b>Hi, {name}!</b>\n\n"
+            "I'm an AI assistant powered by <b>{model}</b>. I answer questions, write and edit texts, "
+            "help with code, translate and look at images.\n\n"
+            "✨ <b>What I can do</b>\n"
+            "• 💬 Remember our conversation — the last {n} messages\n"
+            "• 🎭 Switch roles: translator, programmer, editor — the “Mode” button\n"
+            "• 🖼 Look at photos and albums — up to {k} images at once\n"
+            "• 📌 Keep important things: turn on the “Save” button in settings\n\n"
+            "🚀 <b>Getting started</b>\n"
+            "Just type a question or send a photo. The menu below has modes, settings and chat "
+            "clearing; the full list of commands is /help"
         ),
-        "cleared": "🧹 Chat history cleared! Let's start fresh.",
-        "ask": "💬 Ask me anything or send a photo, I'm ready!",
-        "mode_choose": "🎭 Choose a mode:",
-        "mode_set": "✅ Mode: {mode}\nChat cleared, you can start writing.",
+        "help": (
+            "❓ <b>Help</b>\n\n"
+            "Type your questions as plain text and send photos (several at once is fine). "
+            "While the AI is answering you can stop it with the “⏹ Stop” button.\n\n"
+            "<b>Commands</b>\n"
+            "/mode — choose a mode (the AI's role)\n"
+            "/settings — language, buttons under answers, answer style\n"
+            "/saved — saved messages\n"
+            "/export — download the chat as a file\n"
+            "/clear — clear the chat (with confirmation)\n"
+            "/myprompt — your own instructions for the AI\n"
+            "/myid — your Telegram ID"
+        ),
+        "ask": "💬 Ask me anything or send a photo — several at once is fine. I'm ready!",
+        "mode_choose": (
+            "🎭 <b>Choose a mode</b>\n\n{list}\n\n"
+            "Switching the mode resets the chat; saved messages are kept."
+        ),
+        "mode_set": (
+            "✅ <b>Mode: {mode}</b>\n{desc}\n\n"
+            "🧹 The previous chat was reset — it won't affect the new mode.{pinned}\n\n"
+            "You can start writing!"
+        ),
+        "mode_pinned": "\n📌 Saved messages ({n}) are still in memory.",
+        "mode_same": "This mode is already on",
         "info": (
-            "ℹ <b>Bot info:</b>\n"
-            "• <b>Model:</b> {model}\n"
-            "• <b>Mode:</b> {mode}\n"
-            "• <b>Answer style:</b> {think}\n"
-            "• <b>Memory:</b> last {n} messages\n"
-            "• <b>Limits:</b> {limits}\n"
-            "• <b>Photos:</b> supported\n"
-            "• <b>Creator:</b> @ashoton"
+            "ℹ <b>About the bot</b>\n\n"
+            "🧠 <b>Model:</b> {model}\n"
+            "🎭 <b>Mode:</b> {mode}\n"
+            "⚡ <b>Answer style:</b> {think}\n"
+            "🌐 <b>Language:</b> {language}\n"
+            "💾 <b>Memory:</b> {used} of {n} messages (questions and answers together, ≈{pairs} pairs)\n"
+            "📌 <b>Saved:</b> {pinned}\n"
+            "🖼 <b>Photos:</b> up to {k} at once\n"
+            "⏱ <b>Limits:</b> {limits}\n"
+            "👤 <b>Creator:</b> @ashoton"
         ),
-        "limits_fmt": "{pm}/min, {pd}/day",
+        "limits_fmt": "{pm}/min, {pd}/day ({u} used in the last 24 h)",
+        "limits_admin": "no limits (admin)",
         "unlimited": "unlimited",
-        "busy": "⏳ Please wait, I'm still answering your previous request.",
+        "clear_confirm": (
+            "🧹 <b>Clear the chat?</b>\n"
+            "{n} messages are in memory — they will be deleted and the AI will forget the conversation."
+        ),
+        "clear_confirm_pinned": (
+            "🧹 <b>Clear the chat?</b>\n"
+            "{n} messages are in memory, plus 📌 saved: {p}.\n"
+            "You can clear everything or keep only the saved ones."
+        ),
+        "btn_clear_yes": "🧹 Yes, clear",
+        "btn_clear_all": "🧹 Clear everything",
+        "btn_clear_keep": "📌 Keep saved",
+        "btn_cancel": "✖ Cancel",
+        "cleared": "🧹 Chat history cleared! Let's start fresh.",
+        "cleared_keep": "🧹 Chat cleared. Saved messages ({p}) are still in memory.",
+        "clear_cancelled": "Cancelled — the chat is unchanged.",
+        "clear_empty": "Memory is already empty — nothing to clear.",
+        "busy": "⏳ Please wait, I'm still answering your previous requests.",
+        "queued": "⏳ Your previous request is still being processed — I'll answer right after.",
+        "btn_stop": "⏹ Stop",
+        "stopped": "⏹ Stopped.",
+        "stopped_note": "⏹ Answer stopped.",
+        "stop_none": "Nothing to stop right now",
         "limit_min": "⏳ Too fast: no more than {n} requests per minute. Please wait {wait}.",
         "limit_day": "📅 Daily limit ({n} requests) reached. You can send a new request in {wait}.",
         "wait_sec": "{n} sec.",
@@ -263,9 +441,28 @@ TEXTS = {
         "btn_regen": "🔄 Regenerate",
         "btn_cont": "➡️ Continue",
         "nothing_retry": "Nothing to repeat",
+        "btn_save": "📌 Save",
+        "btn_saved": "✅ Saved",
+        "save_ok": "📌 Saved to memory. See the list: /saved",
+        "save_dup": "This message is already saved",
+        "save_limit": "You can keep up to {n} messages. Remove some via /saved",
+        "save_gone": "This message can no longer be saved — the chat was cleared.",
+        "saved_title": (
+            "📌 <b>Saved messages</b> ({n}/{max})\n"
+            "They stay in the AI's memory until you clear the history.\n\n{items}"
+        ),
+        "saved_empty": (
+            "📌 No saved messages yet.\n\n"
+            "Turn on the “Save” button in ⚙️ Settings — it will appear under the AI's answers."
+        ),
+        "btn_del_all": "🗑 Delete all",
+        "saved_deleted": "Deleted",
+        "pinned_hdr": "Messages the user saved as important context (take them into account in your answers):",
         "photo_gone": "The photo is no longer available — please send it again.",
         "photo_fail": "⚠️ Couldn't load the photo: {e}",
         "photo_caption": "Describe what is in the image.",
+        "photo_caption_multi": "Describe what is in these images.",
+        "album_limit": "📎 I took the first {n} photos — that's the maximum at once.",
         "voice_off": (
             "🎤 Voice messages are not supported yet: the model has no speech recognition. "
             "Please send your question as text or a photo."
@@ -275,13 +472,16 @@ TEXTS = {
         "voice_ok": "🎤 Recognized: {text}",
         "settings": (
             "⚙️ <b>Settings</b>\n\n"
-            "🌐 Interface and AI reply language\n"
-            "🔘 «Regenerate» and «Continue» buttons under answers\n"
-            "🧠 Answer style: <b>⚡ Fast</b> — instant replies, <b>🧠 Thoughtful</b> — the model reasons "
-            "longer (better on hard tasks)\n"
-            "📝 Your own instructions for the AI: /myprompt"
+            "🌐 <b>Language</b> — bot interface and AI replies.\n"
+            "🔁 <b>Regenerate / Continue</b> — buttons under answers.\n"
+            "📌 <b>Save</b> — a button under answers that pins the message in memory until you clear "
+            "the history (list: /saved).\n"
+            "🧠 <b>Answer style</b> — ⚡ Fast: replies right away; 🧠 Thoughtful: reasons longer, better "
+            "on hard tasks.\n"
+            "✏️ Your own instructions for the AI — /myprompt"
         ),
-        "btn_buttons": "🔘 Buttons under answers: {state}",
+        "btn_buttons": "🔁 Regenerate/Continue: {state}",
+        "btn_savebtn": "📌 “Save” button: {state}",
         "btn_think": "🧠 Answer style: {state}",
         "think_fast": "⚡ Fast",
         "think_deep": "🧠 Thoughtful",
@@ -310,6 +510,11 @@ TEXTS = {
         "myprompt_saved": "✅ Instructions saved.",
         "myprompt_reset": "♻️ Instructions reset.",
         "none": "not set",
+        "export_empty": "Nothing to export — the chat is empty.",
+        "export_caption": "📄 Chat: {n} messages (the bot keeps only the last {m}).",
+        "export_you": "You",
+        "export_ai": "AI",
+        "export_saved": "Saved messages",
     },
 }
 
@@ -328,10 +533,18 @@ DEFAULT_PROMPT = {
 MODES = {
     "default": {
         "title": {"ru": "🤖 Обычный", "en": "🤖 Default"},
+        "desc": {
+            "ru": "универсальный помощник для любых вопросов и разговора.",
+            "en": "an all-round assistant for any question or chat.",
+        },
         "prompt": None,
     },
     "translator": {
         "title": {"ru": "🌍 Переводчик", "en": "🌍 Translator"},
+        "desc": {
+            "ru": "пришли текст — переведу: русский → английский, остальные языки → русский.",
+            "en": "send a text and I'll translate it: English → Russian, any other language → English.",
+        },
         "prompt": {
             "ru": (
                 "Ты профессиональный переводчик. Если текст на русском — переводи его на английский, "
@@ -347,6 +560,10 @@ MODES = {
     },
     "programmer": {
         "title": {"ru": "💻 Программист", "en": "💻 Programmer"},
+        "desc": {
+            "ru": "пишет и объясняет код, ищет ошибки, оформляет решения в блоках кода.",
+            "en": "writes and explains code, finds bugs, puts solutions in code blocks.",
+        },
         "prompt": {
             "ru": (
                 "Ты опытный программист и наставник. Пиши чистый, рабочий код и оформляй его в блоках кода "
@@ -362,6 +579,10 @@ MODES = {
     },
     "editor": {
         "title": {"ru": "✍️ Редактор", "en": "✍️ Editor"},
+        "desc": {
+            "ru": "исправляет орфографию, пунктуацию и стиль, затем коротко перечисляет правки.",
+            "en": "fixes spelling, punctuation and style, then briefly lists the changes.",
+        },
         "prompt": {
             "ru": (
                 "Ты внимательный редактор и корректор. Исправляй орфографию, пунктуацию и стиль присланного "
@@ -377,6 +598,30 @@ MODES = {
     },
 }
 
+# Меню команд Telegram (кнопка «/» рядом с полем ввода)
+COMMANDS = {
+    "ru": [
+        ("start", "Запустить бота"),
+        ("help", "Справка по командам"),
+        ("mode", "Выбрать режим"),
+        ("settings", "Настройки"),
+        ("saved", "Сохранённые сообщения"),
+        ("export", "Выгрузить диалог файлом"),
+        ("clear", "Очистить диалог"),
+        ("myprompt", "Свои инструкции для ИИ"),
+    ],
+    "en": [
+        ("start", "Start the bot"),
+        ("help", "Help and commands"),
+        ("mode", "Choose a mode"),
+        ("settings", "Settings"),
+        ("saved", "Saved messages"),
+        ("export", "Download the chat as a file"),
+        ("clear", "Clear the chat"),
+        ("myprompt", "Your own AI instructions"),
+    ],
+}
+
 
 def t(lang: str, key: str, **kw) -> str:
     s = TEXTS.get(lang, TEXTS["ru"]).get(key) or TEXTS["ru"][key]
@@ -386,6 +631,15 @@ def t(lang: str, key: str, **kw) -> str:
 def all_langs(key: str) -> set:
     """Все варианты текста кнопки на всех языках (для фильтров хендлеров)."""
     return {TEXTS[code][key] for code in TEXTS}
+
+
+def modes_list(lang: str, current: str) -> str:
+    """Список режимов с описаниями для сообщения «Выбери режим»."""
+    lines = []
+    for key, m in MODES.items():
+        mark = "👉" if key == current else "•"
+        lines.append(f"{mark} <b>{m['title'][lang]}</b> — {m['desc'][lang]}")
+    return "\n".join(lines)
 # [i18n-end]
 
 BTN_ASK = all_langs("btn_ask")
@@ -394,14 +648,26 @@ BTN_CLEAR = all_langs("btn_clear")
 BTN_INFO = all_langs("btn_info")
 BTN_SETTINGS = all_langs("btn_settings")
 
+
+def make_timeout():
+    """Таймаут запросов к ИИ. «read» — максимальная пауза между кусками ответа: раньше было 60 с, и
+    «долго думающая» модель на сложном запросе падала с ошибкой, ничего не успев написать.
+    Библиотеку для HTTP здесь напрямую не импортируем: берём класс из самого openai."""
+    timeout_cls = getattr(openai, "Timeout", None)
+    if timeout_cls is not None:
+        try:
+            return timeout_cls(connect=15.0, read=AI_TIMEOUT, write=30.0, pool=30.0)
+        except Exception:
+            pass
+    return AI_TIMEOUT  # обычное число секунд работает везде
+
+
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 client = AsyncOpenAI(
     api_key=AI_API_KEY,
     base_url=AI_BASE_URL,
-    # read — максимальная пауза между кусками ответа. Раньше было 60 с, и «долго думающая»
-    # модель на сложном запросе падала с ошибкой таймаута, ничего не успев написать.
-    timeout=httpx.Timeout(connect=15.0, read=AI_TIMEOUT, write=30.0, pool=30.0),
+    timeout=make_timeout(),
     max_retries=1,
 )
 
@@ -409,12 +675,23 @@ admin_router = Router()
 user_router = Router()
 
 user_locks: dict[int, asyncio.Lock] = {}
-last_kb_msg: dict[int, tuple[int, int]] = {}   # user_id -> (chat_id, message_id) с кнопками под ответом
-last_image: dict[int, str] = {}                # user_id -> data URL последнего фото (для «Повторить»)
+waiting: dict[int, int] = {}                   # user_id -> сколько запросов ждут своей очереди
+active_gens: dict = {}                         # user_id -> Gen текущей генерации (для кнопки «Стоп»)
+last_kb_msg: dict[int, tuple[int, int]] = {}   # user_id -> (chat_id, message_id) с кнопками «Повторить/Продолжить»
+last_images: dict[int, list] = {}              # user_id -> data URL фото последнего вопроса (для «Повторить»)
+albums: dict[str, dict] = {}                   # media_group_id -> собираемый альбом фото
 bg_tasks: set = set()
 reasoning_bad: set[str] = set()                # модели, отвергшие параметр reasoning_effort
 STATE = {"maintenance": False, "speedtest": False}
 db: aiosqlite.Connection
+
+
+def spawn(coro) -> asyncio.Task:
+    """Запускает фоновую задачу и держит на неё ссылку, чтобы её не убрал сборщик мусора."""
+    task = asyncio.create_task(coro)
+    bg_tasks.add(task)
+    task.add_done_callback(bg_tasks.discard)
+    return task
 
 
 # ----------------- MARKDOWN -> TELEGRAM HTML -----------------
@@ -533,7 +810,8 @@ async def init_db():
             lang TEXT DEFAULT 'ru',
             buttons INTEGER DEFAULT 0,
             think INTEGER DEFAULT 0,
-            custom_prompt TEXT
+            custom_prompt TEXT,
+            save_btn INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS history(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -542,6 +820,22 @@ async def init_db():
             content TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_history_user ON history(user_id);
+        CREATE TABLE IF NOT EXISTS pinned(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            content TEXT,
+            ts INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_pinned_user ON pinned(user_id);
+        CREATE TABLE IF NOT EXISTS answers(
+            user_id INTEGER,
+            message_id INTEGER,
+            content TEXT,
+            ts INTEGER,
+            PRIMARY KEY (user_id, message_id)
+        );
+        CREATE TABLE IF NOT EXISTS ads_log(ts INTEGER, user_id INTEGER, ok INTEGER);
+        CREATE INDEX IF NOT EXISTS idx_ads_ts ON ads_log(ts);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS errors(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,6 +855,7 @@ async def init_db():
         ("buttons", "INTEGER DEFAULT 0"),
         ("think", "INTEGER DEFAULT 0"),
         ("custom_prompt", "TEXT"),
+        ("save_btn", "INTEGER DEFAULT 0"),
     ):
         if name not in cols:
             await db.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
@@ -610,22 +905,30 @@ async def is_banned(user_id: int) -> bool:
     return bool(await scalar("SELECT banned FROM users WHERE id=?", (user_id,)))
 
 
-async def get_prefs(user_id: int) -> tuple[str, bool, bool]:
-    """Язык интерфейса, кнопки «Повторить/Продолжить» (вкл/выкл), режим «Вдумчиво» (вкл/выкл)."""
-    cur = await db.execute("SELECT lang, buttons, think FROM users WHERE id=?", (user_id,))
+class Prefs(NamedTuple):
+    lang: str        # язык интерфейса
+    buttons: bool    # кнопки «Повторить / Продолжить» под ответом
+    think: bool      # стиль «Вдумчиво»
+    save: bool       # кнопка «Сохранить» под ответом
+
+
+async def get_prefs(user_id: int) -> Prefs:
+    cur = await db.execute(
+        "SELECT lang, buttons, think, save_btn FROM users WHERE id=?", (user_id,)
+    )
     row = await cur.fetchone()
     if not row:
-        return "ru", False, False
+        return Prefs("ru", False, False, False)
     lang = row["lang"] if row["lang"] in LANGS else "ru"
-    return lang, bool(row["buttons"]), bool(row["think"])
+    return Prefs(lang, bool(row["buttons"]), bool(row["think"]), bool(row["save_btn"]))
 
 
 async def get_lang(user_id: int) -> str:
-    return (await get_prefs(user_id))[0]
+    return (await get_prefs(user_id)).lang
 
 
 async def set_user_field(user_id: int, field: str, value):
-    if field not in ("mode", "lang", "buttons", "think", "custom_prompt"):
+    if field not in ("mode", "lang", "buttons", "think", "custom_prompt", "save_btn"):
         raise ValueError(field)
     await db.execute(f"UPDATE users SET {field}=? WHERE id=?", (value, user_id))
     await db.commit()
@@ -648,7 +951,67 @@ async def get_system_prompt(mode: str, lang: str) -> str:
     return await get_setting(key, DEFAULT_PROMPT[lang])
 
 
-async def load_history(user_id: int, limit: int = MAX_HISTORY_LEN) -> list:
+async def build_system_prompt(user_id: int, mode: str, lang: str) -> str:
+    """Системный промпт режима + личные инструкции пользователя + его сохранённые сообщения."""
+    prompt = await get_system_prompt(mode, lang)
+    if mode == "default":
+        custom = await get_custom_prompt(user_id)
+        if custom:
+            prompt += "\n\n" + t(lang, "user_instr") + "\n" + custom
+    pins = await list_pinned(user_id)
+    if pins:
+        parts: list[str] = []
+        total = 0
+        for i, r in enumerate(pins, 1):
+            text = r["content"]
+            if total + len(text) > PINNED_TOTAL_CHARS:
+                text = text[: max(0, PINNED_TOTAL_CHARS - total)]
+                if not text:
+                    break
+            parts.append(f"[{i}] {text}")
+            total += len(text)
+        prompt += "\n\n" + t(lang, "pinned_hdr") + "\n" + "\n\n".join(parts)
+    return prompt
+
+
+# --- память диалога ---
+
+async def get_memory_len() -> int:
+    try:
+        n = int(await get_setting("memory_len", str(MEMORY_DEFAULT)))
+    except ValueError:
+        n = MEMORY_DEFAULT
+    return max(MEMORY_MIN, min(MEMORY_MAX, n))
+
+
+async def get_history_chars() -> int:
+    try:
+        n = int(await get_setting("history_chars", str(HISTORY_CHARS)))
+    except ValueError:
+        n = HISTORY_CHARS
+    return max(1000, n)
+
+
+async def apply_memory_len(n: int):
+    """Сохраняет новый размер памяти и сразу обрезает чужие истории, если память уменьшили."""
+    n = max(MEMORY_MIN, min(MEMORY_MAX, n))
+    await set_setting("memory_len", str(n))
+    try:
+        await db.execute(
+            "DELETE FROM history WHERE id IN ("
+            " SELECT id FROM ("
+            "  SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id DESC) AS rn FROM history"
+            " ) WHERE rn > ?)",
+            (n,),
+        )
+        await db.commit()
+    except Exception:
+        logging.exception("Не удалось сразу обрезать истории — это произойдёт при следующих сообщениях")
+
+
+async def load_history(user_id: int, limit: int | None = None) -> list:
+    if limit is None:
+        limit = await get_memory_len()
     cur = await db.execute(
         "SELECT role, content FROM ("
         " SELECT id, role, content FROM history WHERE user_id=? ORDER BY id DESC LIMIT ?"
@@ -673,6 +1036,10 @@ def trim_by_chars(history: list, limit: int = HISTORY_CHARS) -> list:
     return out
 
 
+async def count_history(user_id: int) -> int:
+    return await scalar("SELECT COUNT(*) FROM history WHERE user_id=?", (user_id,))
+
+
 async def pop_last_exchange(user_id: int):
     await db.execute(
         "DELETE FROM history WHERE id IN ("
@@ -683,6 +1050,7 @@ async def pop_last_exchange(user_id: int):
 
 
 async def save_exchange(user_id: int, question: str, answer: str):
+    """Запоминает И вопрос пользователя, И ответ ИИ (две записи), лишнее старое удаляет."""
     await db.executemany(
         "INSERT INTO history(user_id, role, content) VALUES(?,?,?)",
         [(user_id, "user", question), (user_id, "assistant", answer)],
@@ -690,16 +1058,80 @@ async def save_exchange(user_id: int, question: str, answer: str):
     await db.execute(
         "DELETE FROM history WHERE user_id=? AND id NOT IN ("
         " SELECT id FROM history WHERE user_id=? ORDER BY id DESC LIMIT ?)",
-        (user_id, user_id, MAX_HISTORY_LEN),
+        (user_id, user_id, await get_memory_len()),
     )
     await db.execute("UPDATE users SET msgs = msgs + 1 WHERE id=?", (user_id,))
     await db.commit()
 
 
-async def clear_history(user_id: int):
+async def clear_history(user_id: int, *, pinned: bool = True, answers: bool = True):
+    """Очищает диалог. pinned=False оставляет сохранённые сообщения, answers=False — кэш для кнопки «Сохранить»."""
     await db.execute("DELETE FROM history WHERE user_id=?", (user_id,))
+    if answers:
+        await db.execute("DELETE FROM answers WHERE user_id=?", (user_id,))
+    if pinned:
+        await db.execute("DELETE FROM pinned WHERE user_id=?", (user_id,))
     await db.commit()
-    last_image.pop(user_id, None)
+    last_images.pop(user_id, None)
+
+
+# --- сохранённые сообщения ---
+
+def _norm(content: str) -> str:
+    return content.strip()[:PINNED_ITEM_CHARS]
+
+
+async def count_pinned(user_id: int) -> int:
+    return await scalar("SELECT COUNT(*) FROM pinned WHERE user_id=?", (user_id,))
+
+
+async def list_pinned(user_id: int) -> list:
+    cur = await db.execute("SELECT id, content FROM pinned WHERE user_id=? ORDER BY id", (user_id,))
+    return list(await cur.fetchall())
+
+
+async def is_pinned(user_id: int, content: str) -> bool:
+    return bool(
+        await scalar(
+            "SELECT COUNT(*) FROM pinned WHERE user_id=? AND content=?", (user_id, _norm(content))
+        )
+    )
+
+
+async def add_pinned(user_id: int, content: str) -> str:
+    """Возвращает 'ok', 'dup' (уже сохранено) или 'limit' (достигнут максимум)."""
+    content = _norm(content)
+    if await is_pinned(user_id, content):
+        return "dup"
+    if await count_pinned(user_id) >= PINNED_MAX:
+        return "limit"
+    await db.execute(
+        "INSERT INTO pinned(user_id, content, ts) VALUES(?,?,?)", (user_id, content, int(time.time()))
+    )
+    await db.commit()
+    return "ok"
+
+
+async def remember_answer(user_id: int, message_id: int, content: str):
+    """Запоминает полный текст ответа по id сообщения — нужно, чтобы кнопка «Сохранить» знала, что сохранять."""
+    await db.execute(
+        "INSERT OR REPLACE INTO answers(user_id, message_id, content, ts) VALUES(?,?,?,?)",
+        (user_id, message_id, content, int(time.time())),
+    )
+    await db.execute(
+        "DELETE FROM answers WHERE user_id=? AND message_id NOT IN ("
+        " SELECT message_id FROM answers WHERE user_id=? ORDER BY ts DESC, message_id DESC LIMIT ?)",
+        (user_id, user_id, ANSWERS_KEEP),
+    )
+    await db.commit()
+
+
+async def get_answer(user_id: int, message_id: int) -> str | None:
+    cur = await db.execute(
+        "SELECT content FROM answers WHERE user_id=? AND message_id=?", (user_id, message_id)
+    )
+    row = await cur.fetchone()
+    return row["content"] if row else None
 
 
 async def log_error(user_id: int, text: str):
@@ -774,11 +1206,37 @@ def get_main_menu(lang: str):
     return builder.as_markup(resize_keyboard=True)
 
 
-def answer_kb(lang: str):
+def answer_kb(lang: str, regen: bool, save_state: str | None):
+    """Кнопки под ответом: «Повторить/Продолжить» (regen) и «Сохранить» (save_state: 'save' / 'saved' / None)."""
+    if not regen and not save_state:
+        return None
     b = InlineKeyboardBuilder()
-    b.button(text=t(lang, "btn_regen"), callback_data="re:regen")
-    b.button(text=t(lang, "btn_cont"), callback_data="re:cont")
-    b.adjust(2)
+    sizes = []
+    if regen:
+        b.button(text=t(lang, "btn_regen"), callback_data="re:regen")
+        b.button(text=t(lang, "btn_cont"), callback_data="re:cont")
+        sizes.append(2)
+    if save_state:
+        b.button(
+            text=t(lang, "btn_saved" if save_state == "saved" else "btn_save"), callback_data="sv:add"
+        )
+        sizes.append(1)
+    b.adjust(*sizes)
+    return b.as_markup()
+
+
+async def build_answer_kb(user_id: int, message_id: int, lang: str, regen: bool, save_on: bool):
+    """Клавиатура уже отправленного ответа с учётом того, сохранён ли он."""
+    state = None
+    if save_on:
+        ans = await get_answer(user_id, message_id)
+        state = "saved" if ans is not None and await is_pinned(user_id, ans) else "save"
+    return answer_kb(lang, regen, state)
+
+
+def stop_kb(lang: str):
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_stop"), callback_data="st:stop")
     return b.as_markup()
 
 
@@ -790,19 +1248,34 @@ def modes_kb(current: str, lang: str):
     return b.as_markup()
 
 
-def settings_kb(lang: str, buttons_on: bool, think: bool):
+def settings_kb(lang: str, prefs: Prefs):
+    def state(v: bool) -> str:
+        return t(lang, "on" if v else "off")
+
     b = InlineKeyboardBuilder()
     for code, name in LANGS.items():
         b.button(text=("✅ " if code == lang else "") + name, callback_data=f"set:lang:{code}")
+    b.button(text=t(lang, "btn_buttons", state=state(prefs.buttons)), callback_data="set:btns")
+    b.button(text=t(lang, "btn_savebtn", state=state(prefs.save)), callback_data="set:save")
     b.button(
-        text=t(lang, "btn_buttons", state=t(lang, "on" if buttons_on else "off")),
-        callback_data="set:btns",
-    )
-    b.button(
-        text=t(lang, "btn_think", state=t(lang, "think_deep" if think else "think_fast")),
+        text=t(lang, "btn_think", state=t(lang, "think_deep" if prefs.think else "think_fast")),
         callback_data="set:think",
     )
-    b.adjust(2, 1, 1)
+    b.adjust(2, 1, 1, 1)
+    return b.as_markup()
+
+
+def clear_kb(lang: str, has_pinned: bool):
+    b = InlineKeyboardBuilder()
+    if has_pinned:
+        b.button(text=t(lang, "btn_clear_all"), callback_data="cl:all")
+        b.button(text=t(lang, "btn_clear_keep"), callback_data="cl:keep")
+        b.button(text=t(lang, "btn_cancel"), callback_data="cl:no")
+        b.adjust(1)
+    else:
+        b.button(text=t(lang, "btn_clear_yes"), callback_data="cl:all")
+        b.button(text=t(lang, "btn_cancel"), callback_data="cl:no")
+        b.adjust(2)
     return b.as_markup()
 
 
@@ -840,6 +1313,8 @@ class Gen:
         self.thinking = False         # модель присылала рассуждение
         self.dropped_effort = False   # провайдер не принял reasoning_effort
         self.note = ""                # пометка для заглушки (например, переключение на резервную модель)
+        self.stopped = False          # пользователь нажал «Стоп»
+        self.task = None              # asyncio-задача генерации (её отменяет «Стоп»)
 
 
 async def generate(model: str, messages: list, effort, gen: Gen, remember: bool = True):
@@ -915,174 +1390,316 @@ async def run_ai(
     chat_id: int,
     user_id: int,
     question: str,
-    image_url: str | None = None,
+    images: list | None = None,
     regen: bool = False,
 ):
-    lang, buttons_on, think = await get_prefs(user_id)
-
+    """Отправляет вопрос (с фото или без) модели. Запросы одного человека идут по очереди."""
+    lang = (await get_prefs(user_id)).lang
     lock = user_locks.setdefault(user_id, asyncio.Lock())
+
+    note = None
     if lock.locked():
-        await bot.send_message(chat_id, t(lang, "busy"))
-        return
-
-    async with lock:
-        denied = await check_limit(user_id, lang)
-        if denied:
-            await bot.send_message(chat_id, denied)
+        if waiting.get(user_id, 0) >= MAX_QUEUE:
+            await bot.send_message(chat_id, t(lang, "busy"))
             return
-
-        # убираем кнопки под прошлым ответом
-        old = last_kb_msg.pop(user_id, None)
-        if old:
+        waiting[user_id] = waiting.get(user_id, 0) + 1
+        try:
             try:
-                await bot.edit_message_reply_markup(chat_id=old[0], message_id=old[1], reply_markup=None)
+                note = await bot.send_message(chat_id, t(lang, "queued"))
+            except Exception:
+                note = None
+            await lock.acquire()
+        finally:
+            waiting[user_id] -= 1
+    else:
+        await lock.acquire()
+
+    try:
+        if note is not None:
+            try:
+                await bot.delete_message(chat_id, note.message_id)
             except Exception:
                 pass
+        await _run_locked(chat_id, user_id, question, images, regen)
+    finally:
+        lock.release()
 
-        # заглушка сразу, всё остальное — потом
-        sent = await bot.send_message(chat_id, t(lang, "thinking"))
 
-        # считаем попытку сразу, чтобы лимит нельзя было обойти ошибками
-        await db.execute("INSERT INTO requests(ts, user_id) VALUES(?,?)", (int(time.time()), user_id))
-        await db.commit()
+async def _run_locked(chat_id: int, user_id: int, question: str, images: list | None, regen: bool):
+    prefs = await get_prefs(user_id)
+    lang = prefs.lang
 
-        mode = await get_mode(user_id)
-        prompt = await get_system_prompt(mode, lang)
-        if mode == "default":
-            custom = await get_custom_prompt(user_id)
-            if custom:
-                prompt += "\n\n" + t(lang, "user_instr") + "\n" + custom
-        model = VISION_MODEL if image_url else await get_setting("model", MODEL)
-        effort = await get_setting(
-            "effort_think" if think else "effort_fast", EFFORT_THINK if think else EFFORT_FAST
-        )
-        fallback = await get_setting("fallback_model", FALLBACK_MODEL)
+    denied = await check_limit(user_id, lang)
+    if denied:
+        await bot.send_message(chat_id, denied)
+        return
 
-        history = await load_history(user_id, MAX_HISTORY_LEN + (2 if regen else 0))
-        if regen:
-            history = history[:-2]
-        history = trim_by_chars(history)
+    # под прошлым ответом убираем «Повторить/Продолжить» (кнопка «Сохранить» остаётся)
+    old = last_kb_msg.pop(user_id, None)
+    if old:
+        try:
+            kb = await build_answer_kb(user_id, old[1], lang, regen=False, save_on=prefs.save)
+            await bot.edit_message_reply_markup(chat_id=old[0], message_id=old[1], reply_markup=kb)
+        except Exception:
+            pass
 
-        if image_url:
-            user_content = [
-                {"type": "text", "text": question},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ]
-            stored_question = f"{PHOTO_TAG} {question}"
-        else:
-            user_content = question
-            stored_question = question
+    # заглушка сразу (с кнопкой «Стоп»), всё остальное — потом
+    stop_markup = stop_kb(lang)
+    sent = await bot.send_message(chat_id, t(lang, "thinking"), reply_markup=stop_markup)
 
-        messages = [{"role": "system", "content": prompt}] + history + [
-            {"role": "user", "content": user_content}
+    # считаем попытку сразу, чтобы лимит нельзя было обойти ошибками
+    await db.execute("INSERT INTO requests(ts, user_id) VALUES(?,?)", (int(time.time()), user_id))
+    await db.commit()
+
+    mode = await get_mode(user_id)
+    prompt = await build_system_prompt(user_id, mode, lang)
+    model = VISION_MODEL if images else await get_setting("model", MODEL)
+    effort = await get_setting(
+        "effort_think" if prefs.think else "effort_fast",
+        EFFORT_THINK if prefs.think else EFFORT_FAST,
+    )
+    fallback = await get_setting("fallback_model", FALLBACK_MODEL)
+
+    memory = await get_memory_len()
+    history = await load_history(user_id, memory + (2 if regen else 0))
+    if regen:
+        history = history[:-2]
+    history = trim_by_chars(history, await get_history_chars())
+
+    if images:
+        user_content = [{"type": "text", "text": question}] + [
+            {"type": "image_url", "image_url": {"url": u}} for u in images
         ]
+        stored_question = f"{photo_tag(len(images))} {question}"
+    else:
+        user_content = question
+        stored_question = question
 
-        gen = Gen()
+    messages = [{"role": "system", "content": prompt}] + history + [
+        {"role": "user", "content": user_content}
+    ]
 
-        async def ticker():
-            """Обновляет сообщение в Telegram независимо от чтения потока: не тормозит приём ответа."""
-            last_shown = ""
-            last_typing = 0.0
-            last_wait_edit = 0.0
-            try:
-                while True:
-                    await asyncio.sleep(EDIT_INTERVAL)
-                    now = time.time()
-                    if now - last_typing > 4:
-                        last_typing = now
+    gen = Gen()
+
+    async def ticker():
+        """Обновляет сообщение в Telegram независимо от чтения потока: не тормозит приём ответа."""
+        last_shown = ""
+        last_typing = 0.0
+        last_wait_edit = 0.0
+        try:
+            while True:
+                await asyncio.sleep(EDIT_INTERVAL)
+                now = time.time()
+                if now - last_typing > 4:
+                    last_typing = now
+                    try:
+                        await bot.send_chat_action(chat_id, "typing")
+                    except Exception:
+                        pass
+                if gen.text.strip():
+                    shown = split_markdown(gen.text.strip())[0]
+                    if shown != last_shown:
                         try:
-                            await bot.send_chat_action(chat_id, "typing")
-                        except Exception:
-                            pass
-                    if gen.text.strip():
-                        shown = split_markdown(gen.text.strip())[0]
-                        if shown != last_shown:
-                            try:
-                                await edit_md(chat_id, sent.message_id, shown)
-                                last_shown = shown
-                            except TelegramRetryAfter as e:
-                                await asyncio.sleep(e.retry_after)
-                            except Exception:
-                                pass
-                    elif now - gen.started >= 4 and now - last_wait_edit >= 3:
-                        last_wait_edit = now
-                        try:
-                            await bot.edit_message_text(
-                                waiting_text(lang, gen), chat_id=chat_id, message_id=sent.message_id
-                            )
+                            await edit_md(chat_id, sent.message_id, shown, stop_markup)
+                            last_shown = shown
                         except TelegramRetryAfter as e:
                             await asyncio.sleep(e.retry_after)
                         except Exception:
                             pass
-            except asyncio.CancelledError:
-                return
-
-        # --- генерация: основная модель, при сбое без единого символа — резервная ---
-        attempts = [(model, effort)]
-        if fallback and fallback != "off" and fallback != model and not image_url:
-            attempts.append((fallback, None))
-
-        err = None
-        ticker_task = asyncio.create_task(ticker())
-        try:
-            for i, (m, eff) in enumerate(attempts):
-                try:
-                    await asyncio.wait_for(generate(m, messages, eff, gen), TOTAL_TIMEOUT)
-                    err = None
-                    break
-                except Exception as e:
-                    err = e
-                    logging.warning("Сбой модели %s: %s: %s", m, type(e).__name__, e)
-                    await log_error(user_id, f"{m}: {type(e).__name__}: {e}")
-                    if gen.text or i == len(attempts) - 1:
-                        break
-                    gen.note = t(lang, "fallback_note")
-                    gen.started = time.time()
-        finally:
-            ticker_task.cancel()
-            try:
-                await ticker_task
-            except asyncio.CancelledError:
-                pass
-
-        final = gen.text.strip()
-
-        if not final:
-            if err is None:
-                await log_error(user_id, "Пустой ответ от модели")
-            msg = friendly_error(lang, err) if err is not None else t(lang, "empty")
-            try:
-                await bot.edit_message_text(msg[:4096], chat_id=chat_id, message_id=sent.message_id)
-            except Exception:
-                await bot.send_message(chat_id, msg[:4096])
+                elif now - gen.started >= 4 and now - last_wait_edit >= 3:
+                    last_wait_edit = now
+                    try:
+                        await bot.edit_message_text(
+                            waiting_text(lang, gen),
+                            chat_id=chat_id,
+                            message_id=sent.message_id,
+                            reply_markup=stop_markup,
+                        )
+                    except TelegramRetryAfter as e:
+                        await asyncio.sleep(e.retry_after)
+                    except Exception:
+                        pass
+        except asyncio.CancelledError:
             return
 
-        # ответ обрывался на середине: показываем, что успели получить, и пометку
-        display = final + ("\n\n" + t(lang, "cut_note") if err is not None else "")
+    # --- генерация: основная модель, при сбое без единого символа — резервная ---
+    attempts = [(model, effort)]
+    if fallback and fallback != "off" and fallback != model and not images:
+        attempts.append((fallback, None))
 
-        # --- доставка с форматированием (и кнопками, если включены в настройках) ---
+    holder = {"err": None}
+
+    async def produce():
+        for i, (m, eff) in enumerate(attempts):
+            try:
+                await asyncio.wait_for(generate(m, messages, eff, gen), TOTAL_TIMEOUT)
+                holder["err"] = None
+                return
+            except Exception as e:
+                holder["err"] = e
+                logging.warning("Сбой модели %s: %s: %s", m, type(e).__name__, e)
+                await log_error(user_id, f"{m}: {type(e).__name__}: {e}")
+                if gen.text or i == len(attempts) - 1:
+                    return
+                gen.note = t(lang, "fallback_note")
+                gen.started = time.time()
+
+    work = asyncio.create_task(produce())
+    gen.task = work
+    active_gens[user_id] = gen
+    ticker_task = asyncio.create_task(ticker())
+    try:
+        await asyncio.wait({work})
+    finally:
+        active_gens.pop(user_id, None)
+        if not work.done():
+            work.cancel()
+        ticker_task.cancel()
         try:
-            chunks = split_markdown(display)
-            kb = answer_kb(lang) if buttons_on else None
-            await with_retry(
-                edit_md, chat_id, sent.message_id, chunks[0], kb if len(chunks) == 1 else None
-            )
-            last_id = sent.message_id
-            for i, part in enumerate(chunks[1:], start=1):
-                msg = await with_retry(send_md, chat_id, part, kb if i == len(chunks) - 1 else None)
-                last_id = msg.message_id
-            if kb:
-                last_kb_msg[user_id] = (chat_id, last_id)
-        except Exception:
-            logging.exception("Не удалось доставить ответ")
-            await log_error(user_id, "Не удалось доставить ответ в Telegram")
+            await ticker_task
+        except asyncio.CancelledError:
+            pass
 
-        # --- сохраняем в память ---
-        if regen:
-            await pop_last_exchange(user_id)
-        await save_exchange(user_id, stored_question, final)
-        if image_url:
-            last_image[user_id] = image_url
+    err = holder["err"]
+    if not work.cancelled() and work.exception() is not None:
+        err = work.exception()
+    if gen.stopped:
+        err = None  # остановил сам пользователь — это не сбой
+
+    final = gen.text.strip()
+
+    if not final:
+        if gen.stopped:
+            msg = t(lang, "stopped")
+        elif err is not None:
+            msg = friendly_error(lang, err)
+        else:
+            await log_error(user_id, "Пустой ответ от модели")
+            msg = t(lang, "empty")
+        try:
+            await bot.edit_message_text(msg[:4096], chat_id=chat_id, message_id=sent.message_id)
+        except Exception:
+            await bot.send_message(chat_id, msg[:4096])
+        return
+
+    # ответ обрывался на середине / его остановили: показываем, что успели получить, и пометку
+    display = final
+    if gen.stopped:
+        display += "\n\n" + t(lang, "stopped_note")
+    elif err is not None:
+        display += "\n\n" + t(lang, "cut_note")
+
+    # --- доставка с форматированием (и кнопками, если включены в настройках) ---
+    last_id = sent.message_id
+    try:
+        chunks = split_markdown(display)
+        kb = answer_kb(lang, prefs.buttons, "save" if prefs.save else None)
+        await with_retry(
+            edit_md, chat_id, sent.message_id, chunks[0], kb if len(chunks) == 1 else None
+        )
+        for i, part in enumerate(chunks[1:], start=1):
+            msg = await with_retry(send_md, chat_id, part, kb if i == len(chunks) - 1 else None)
+            last_id = msg.message_id
+        if prefs.buttons:
+            last_kb_msg[user_id] = (chat_id, last_id)
+    except Exception:
+        logging.exception("Не удалось доставить ответ")
+        await log_error(user_id, "Не удалось доставить ответ в Telegram")
+
+    # --- сохраняем в память ---
+    if prefs.save:
+        await remember_answer(user_id, last_id, final)
+    if regen:
+        await pop_last_exchange(user_id)
+    await save_exchange(user_id, stored_question, final)
+    if images:
+        last_images[user_id] = images
+    if not gen.stopped and err is None and not regen:
+        spawn(maybe_show_ad(chat_id, user_id, lang))
+
+
+# ================= РЕКЛАМА (AdsGram) =================
+
+ads_state: dict[int, dict] = {}   # user_id -> {"n": ответов с прошлой рекламы, "last": время последнего показа}
+
+
+async def ads_enabled() -> bool:
+    return bool(ADSGRAM_BLOCK_ID) and (await get_setting("ads_on", "1")) == "1"
+
+
+async def get_ads_every() -> int:
+    try:
+        return max(1, int(await get_setting("ads_every", str(ADS_EVERY))))
+    except ValueError:
+        return max(1, ADS_EVERY)
+
+
+async def fetch_ad(user_id: int, lang: str) -> dict | None:
+    """Просит у AdsGram рекламу для пользователя. Нет рекламы или сбой — None (бот работает как обычно)."""
+    params = {"tgid": str(user_id), "blockid": ADSGRAM_BLOCK_ID, "language": lang}
+    if ADSGRAM_TOKEN:
+        params["token"] = ADSGRAM_TOKEN
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as sess:
+            async with sess.get(ADS_API, params=params) as r:
+                if r.status != 200:
+                    return None
+                data = await r.json(content_type=None)
+    except Exception as e:
+        logging.warning("AdsGram: не удалось получить рекламу: %s: %s", type(e).__name__, e)
+        return None
+    if not isinstance(data, dict) or not data.get("text_html"):
+        return None
+    return data
+
+
+async def send_ad(chat_id: int, ad: dict):
+    """Отправляет рекламу по правилам AdsGram: HTML-текст, картинка, кнопки, запрет пересылки."""
+    b = InlineKeyboardBuilder()
+    if ad.get("click_url") and ad.get("button_name"):
+        b.button(text=str(ad["button_name"])[:64], url=ad["click_url"])
+    if ad.get("reward_url") and ad.get("button_reward_name"):
+        b.button(text=str(ad["button_reward_name"])[:64], url=ad["reward_url"])
+    b.adjust(1)
+    kb = b.as_markup() if (ad.get("click_url") or ad.get("reward_url")) else None
+    text = str(ad["text_html"])
+    img = ad.get("image_url")
+    if img and len(text) <= 1000:
+        try:
+            await bot.send_photo(
+                chat_id, img, caption=text, parse_mode="HTML", reply_markup=kb, protect_content=True
+            )
+            return
+        except Exception as e:
+            logging.warning("AdsGram: не вышло отправить с картинкой (%s), шлю текстом", e)
+    await bot.send_message(
+        chat_id, text, parse_mode="HTML", reply_markup=kb, protect_content=True,
+        disable_web_page_preview=True,
+    )
+
+
+async def maybe_show_ad(chat_id: int, user_id: int, lang: str):
+    """Вызывается после каждого успешного ответа. Реклама идёт ОТДЕЛЬНЫМ сообщением и не задерживает ответ."""
+    try:
+        if user_id in ADMIN_IDS or not await ads_enabled():
+            return
+        st = ads_state.setdefault(user_id, {"n": 0, "last": 0.0})
+        st["n"] += 1
+        if st["n"] < await get_ads_every() or time.time() - st["last"] < ADS_MIN_GAP:
+            return
+        ad = await fetch_ad(user_id, lang)
+        ok = 0
+        if ad:
+            await send_ad(chat_id, ad)
+            ok = 1
+            st["n"] = 0
+            st["last"] = time.time()
+        else:
+            st["n"] = max(0, st["n"] - 2)   # рекламы нет — попробуем снова через пару ответов
+        await db.execute("INSERT INTO ads_log(ts, user_id, ok) VALUES(?,?,?)", (int(time.time()), user_id, ok))
+        await db.commit()
+    except Exception:
+        logging.exception("AdsGram: ошибка показа рекламы (на работу бота не влияет)")
 
 
 # ================= АДМИН-ПАНЕЛЬ (на русском) =================
@@ -1106,7 +1723,9 @@ def admin_kb():
     b.button(text="✅ Разбан", callback_data="adm:unban")
     b.button(text="🧠 Модель", callback_data="adm:model")
     b.button(text="📝 Промпт", callback_data="adm:prompt")
+    b.button(text="🧮 Память", callback_data="adm:mem")
     b.button(text="⏱ Лимиты", callback_data="adm:limits")
+    b.button(text="💰 Реклама", callback_data="adm:ads")
     b.button(text="⚡ Скорость", callback_data="adm:speed_menu")
     b.button(text="👤 Пользователь", callback_data="adm:userinfo")
     b.button(text="💾 Бэкап БД", callback_data="adm:backup")
@@ -1153,6 +1772,76 @@ def confirm_kb():
     b.button(text="❌ Отмена", callback_data="adm:bc_no")
     b.adjust(2)
     return b.as_markup()
+
+
+MEMORY_PRESETS = (10, 20, 30, 50, 100)
+
+
+def memory_kb(current: int):
+    b = InlineKeyboardBuilder()
+    for n in MEMORY_PRESETS:
+        b.button(text=("✅ " if n == current else "") + str(n), callback_data=f"adm:memset:{n}")
+    b.button(text="✏️ Своё число", callback_data="adm:mem_custom")
+    b.button(text="📏 Лимит объёма", callback_data="adm:hist_chars")
+    b.button(text="⬅️ Назад", callback_data="adm:menu")
+    b.adjust(5, 2, 1)
+    return b.as_markup()
+
+
+async def memory_text() -> str:
+    n = await get_memory_len()
+    chars = await get_history_chars()
+    total = await scalar("SELECT COUNT(*) FROM history")
+    users = await scalar("SELECT COUNT(DISTINCT user_id) FROM history")
+    pins = await scalar("SELECT COUNT(*) FROM pinned")
+    return (
+        "🧮 <b>Память диалога</b>\n\n"
+        f"Сейчас: <b>{n}</b> сообщений (≈{n // 2} пар «вопрос — ответ»).\n"
+        "Бот хранит и сообщения пользователя, и ответы ИИ — всё это уходит модели с каждым запросом. "
+        "Чем больше память, тем больше токенов тратится и тем дольше может идти ответ.\n\n"
+        f"📏 Лимит объёма: <b>{chars}</b> символов истории в одном запросе. Если диалог длиннее, "
+        "самые старые сообщения не отправляются модели (но остаются в памяти до вытеснения).\n\n"
+        f"В базе сейчас: {total} сообщений у {users} пользователей, 📌 сохранённых: {pins}.\n"
+        f"Допустимо от {MEMORY_MIN} до {MEMORY_MAX}. При уменьшении старые сообщения у всех сразу удаляются."
+    )
+
+
+ADS_PRESETS = (3, 5, 6, 10, 20)
+
+
+def ads_kb(on: bool, every: int):
+    b = InlineKeyboardBuilder()
+    b.button(text="⏸ Выключить" if on else "▶️ Включить", callback_data="adm:ads_toggle")
+    for n in ADS_PRESETS:
+        b.button(text=("✅ " if n == every else "") + f"каждый {n}-й", callback_data=f"adm:ads_every:{n}")
+    b.button(text="⬅️ Назад", callback_data="adm:menu")
+    b.adjust(1, 3, 2, 1)
+    return b.as_markup()
+
+
+async def ads_text() -> str:
+    day = int(time.time()) - 86400
+    shown = await scalar("SELECT COUNT(*) FROM ads_log WHERE ok=1")
+    shown_day = await scalar("SELECT COUNT(*) FROM ads_log WHERE ok=1 AND ts>?", (day,))
+    empty_day = await scalar("SELECT COUNT(*) FROM ads_log WHERE ok=0 AND ts>?", (day,))
+    people = await scalar("SELECT COUNT(DISTINCT user_id) FROM ads_log WHERE ok=1 AND ts>?", (day,))
+    if not ADSGRAM_BLOCK_ID:
+        state = "⚠️ не настроена: задай переменную ADSGRAM_BLOCK_ID на Amvera"
+    elif await ads_enabled():
+        state = "✅ включена"
+    else:
+        state = "⏸ выключена"
+    return (
+        "💰 <b>Реклама AdsGram</b>\n\n"
+        f"Статус: {state}\n"
+        f"Блок: <code>{ADSGRAM_BLOCK_ID or '—'}</code>"
+        f"{' · токен задан' if ADSGRAM_TOKEN else ''}\n"
+        f"Частота: после каждого <b>{await get_ads_every()}-го</b> ответа, не чаще раза в "
+        f"{ADS_MIN_GAP // 60} мин на человека. Админам реклама не показывается.\n\n"
+        f"Показов за 24ч: <b>{shown_day}</b> ({people} чел.), всего: {shown}\n"
+        f"За 24ч у AdsGram не нашлось рекламы: {empty_day} раз\n\n"
+        "Доход смотри в кабинете partner.adsgram.ai."
+    )
 
 
 def speed_kb():
@@ -1269,6 +1958,8 @@ async def user_card(uid: int):
     req24 = await scalar(
         "SELECT COUNT(*) FROM requests WHERE user_id=? AND ts>?", (uid, int(time.time()) - 86400)
     )
+    pins = await count_pinned(uid)
+    used = await count_history(uid)
     custom = r["custom_prompt"]
     text = (
         f"👤 <b>{fmt_user(r)}</b>\n"
@@ -1278,7 +1969,10 @@ async def user_card(uid: int):
         f"Последняя активность: {fmt_ts(r['last_seen'], '%d.%m.%Y %H:%M')}\n"
         f"Ответов получено: {r['msgs']} (за 24ч запросов: {req24})\n"
         f"Режим: {html.escape(str(r['mode']))} · язык: {html.escape(str(r['lang']))} · "
-        f"стиль: {'вдумчиво' if r['think'] else 'быстро'} · кнопки: {'вкл' if r['buttons'] else 'выкл'}\n"
+        f"стиль: {'вдумчиво' if r['think'] else 'быстро'}\n"
+        f"Кнопки «Повторить/Продолжить»: {'вкл' if r['buttons'] else 'выкл'} · "
+        f"«Сохранить»: {'вкл' if r['save_btn'] else 'выкл'}\n"
+        f"В памяти: {used} сообщений · 📌 сохранено: {pins}\n"
         f"Свои инструкции: {html.escape(custom[:200]) if custom else '—'}"
     )
     b = InlineKeyboardBuilder()
@@ -1333,6 +2027,7 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
         err_day = await scalar("SELECT COUNT(*) FROM errors WHERE ts>?", (day,))
         en_users = await scalar("SELECT COUNT(*) FROM users WHERE lang='en'")
         model = await get_setting("model", MODEL)
+        memory = await get_memory_len()
         cur = await db.execute(
             "SELECT id, first_name, username, msgs FROM users ORDER BY msgs DESC LIMIT 5"
         )
@@ -1349,7 +2044,8 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
             f"💬 Запросов за 24ч: <b>{req_day}</b>\n"
             f"💬 Запросов всего: <b>{req_all}</b>\n"
             f"⚠️ Ошибок за 24ч: <b>{err_day}</b>\n"
-            f"🧠 Модель: <code>{html.escape(model)}</code>\n\n"
+            f"🧠 Модель: <code>{html.escape(model)}</code>\n"
+            f"🧮 Память диалога: <b>{memory}</b> сообщений\n\n"
             f"🏆 <b>Топ по запросам:</b>\n{top_text}",
         )
 
@@ -1441,6 +2137,47 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
         await del_setting("system_prompt")
         await del_setting("system_prompt_en")
         await show(cb, "♻️ Промпты сброшены на стандартные.", prompt_kb())
+
+    elif action == "mem":
+        await state.clear()
+        await show(cb, await memory_text(), memory_kb(await get_memory_len()))
+
+    elif action == "memset":
+        if arg.isdigit() and MEMORY_MIN <= int(arg) <= MEMORY_MAX:
+            await apply_memory_len(int(arg))
+        n = await get_memory_len()
+        await show(cb, await memory_text(), memory_kb(n))
+
+    elif action == "mem_custom":
+        await state.set_state(Admin.waiting)
+        await state.update_data(action="memory")
+        await show(
+            cb,
+            f"Пришли, сколько сообщений помнить (от {MEMORY_MIN} до {MEMORY_MAX}). "
+            "Вопрос и ответ считаются двумя сообщениями.\n/cancel — отмена",
+        )
+
+    elif action == "hist_chars":
+        await state.set_state(Admin.waiting)
+        await state.update_data(action="hist_chars")
+        await show(
+            cb,
+            "Пришли лимит объёма истории в символах (от 1000). Чем меньше, тем быстрее ответы, "
+            "но тем меньше сообщений реально видит модель. Сейчас: "
+            f"<b>{await get_history_chars()}</b>.\n/cancel — отмена",
+        )
+
+    elif action == "ads":
+        await show(cb, await ads_text(), ads_kb(await ads_enabled(), await get_ads_every()))
+
+    elif action == "ads_toggle":
+        await set_setting("ads_on", "0" if (await get_setting("ads_on", "1")) == "1" else "1")
+        await show(cb, await ads_text(), ads_kb(await ads_enabled(), await get_ads_every()))
+
+    elif action == "ads_every":
+        if arg.isdigit() and 1 <= int(arg) <= 100:
+            await set_setting("ads_every", arg)
+        await show(cb, await ads_text(), ads_kb(await ads_enabled(), await get_ads_every()))
 
     elif action == "limits":
         per_min, per_day = await get_limits()
@@ -1548,9 +2285,7 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
         if not text:
             await show(cb, "Нечего отправлять.")
             return
-        task = asyncio.create_task(do_broadcast(text, cb.message.chat.id))
-        bg_tasks.add(task)
-        task.add_done_callback(bg_tasks.discard)
+        spawn(do_broadcast(text, cb.message.chat.id))
         await show(cb, "📢 Рассылка запущена, по окончании пришлю отчёт.")
 
     elif action == "bc_no":
@@ -1612,6 +2347,28 @@ async def admin_input(message: types.Message, state: FSMContext):
         await state.clear()
         await message.answer(
             f"✅ Системный промпт ({plang.upper()}) обновлён.", reply_markup=admin_kb()
+        )
+
+    elif action == "memory":
+        if not text.isdigit() or not (MEMORY_MIN <= int(text) <= MEMORY_MAX):
+            await message.answer(
+                f"Нужно целое число от {MEMORY_MIN} до {MEMORY_MAX}. Попробуй ещё раз или /cancel."
+            )
+            return
+        await apply_memory_len(int(text))
+        await state.clear()
+        await message.answer(
+            await memory_text(), parse_mode="HTML", reply_markup=memory_kb(await get_memory_len())
+        )
+
+    elif action == "hist_chars":
+        if not text.isdigit() or int(text) < 1000:
+            await message.answer("Нужно целое число от 1000. Попробуй ещё раз или /cancel.")
+            return
+        await set_setting("history_chars", str(int(text)))
+        await state.clear()
+        await message.answer(
+            await memory_text(), parse_mode="HTML", reply_markup=memory_kb(await get_memory_len())
         )
 
     elif action in ("limit_min", "limit_day"):
@@ -1682,26 +2439,76 @@ async def cmd_start(message: types.Message):
             "start",
             name=html.escape(message.from_user.first_name or ("друг" if lang == "ru" else "friend")),
             model=html.escape(model),
+            n=await get_memory_len(),
+            k=MAX_IMAGES,
         ),
         parse_mode="HTML",
         reply_markup=get_main_menu(lang),
     )
 
 
+@user_router.message(Command("help"))
+async def cmd_help(message: types.Message):
+    lang = await get_lang(message.from_user.id)
+    await message.answer(t(lang, "help"), parse_mode="HTML")
+
+
+# --- очистка диалога (с подтверждением) ---
+
 @user_router.message(Command("clear", "reset"))
 @user_router.message(F.text.in_(BTN_CLEAR))
 async def cmd_clear(message: types.Message):
-    lang = await get_lang(message.from_user.id)
-    await clear_history(message.from_user.id)
-    await message.answer(t(lang, "cleared"))
+    uid = message.from_user.id
+    lang = await get_lang(uid)
+    n = await count_history(uid)
+    p = await count_pinned(uid)
+    if n == 0 and p == 0:
+        await message.answer(t(lang, "clear_empty"))
+        return
+    key = "clear_confirm_pinned" if p else "clear_confirm"
+    await message.answer(
+        t(lang, key, n=n, p=p), parse_mode="HTML", reply_markup=clear_kb(lang, p > 0)
+    )
 
+
+@user_router.callback_query(F.data.startswith("cl:"))
+async def cb_clear(cb: types.CallbackQuery):
+    uid = cb.from_user.id
+    lang = await get_lang(uid)
+    action = cb.data.split(":", 1)[1]
+    if action == "no":
+        text = t(lang, "clear_cancelled")
+    elif action == "keep":
+        p = await count_pinned(uid)
+        await clear_history(uid, pinned=False)
+        text = t(lang, "cleared_keep", p=p) if p else t(lang, "cleared")
+    elif action == "all":
+        await clear_history(uid)
+        text = t(lang, "cleared")
+    else:
+        await cb.answer()
+        return
+    last_kb_msg.pop(uid, None)
+    try:
+        await cb.message.edit_text(text, parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await cb.answer()
+
+
+# --- режимы ---
 
 @user_router.message(Command("mode"))
 @user_router.message(F.text.in_(BTN_MODE))
 async def cmd_mode(message: types.Message):
-    lang = await get_lang(message.from_user.id)
-    current = await get_mode(message.from_user.id)
-    await message.answer(t(lang, "mode_choose"), reply_markup=modes_kb(current, lang))
+    uid = message.from_user.id
+    lang = await get_lang(uid)
+    current = await get_mode(uid)
+    await message.answer(
+        t(lang, "mode_choose", list=modes_list(lang, current)),
+        parse_mode="HTML",
+        reply_markup=modes_kb(current, lang),
+    )
 
 
 @user_router.callback_query(F.data.startswith("mode:"))
@@ -1710,12 +2517,25 @@ async def cb_mode(cb: types.CallbackQuery):
     if key not in MODES:
         await cb.answer()
         return
-    lang = await get_lang(cb.from_user.id)
-    await set_user_field(cb.from_user.id, "mode", key)
-    await clear_history(cb.from_user.id)  # чтобы контекст прошлого режима не мешал
+    uid = cb.from_user.id
+    lang = await get_lang(uid)
+    if key == await get_mode(uid):
+        await cb.answer(t(lang, "mode_same"))
+        return
+    await set_user_field(uid, "mode", key)
+    # прошлый диалог сбрасываем, чтобы он не мешал новому режиму; сохранённые сообщения остаются
+    await clear_history(uid, pinned=False, answers=False)
+    p = await count_pinned(uid)
     try:
         await cb.message.edit_text(
-            t(lang, "mode_set", mode=MODES[key]["title"][lang]),
+            t(
+                lang,
+                "mode_set",
+                mode=MODES[key]["title"][lang],
+                desc=MODES[key]["desc"][lang],
+                pinned=t(lang, "mode_pinned", n=p) if p else "",
+            ),
+            parse_mode="HTML",
             reply_markup=modes_kb(key, lang),
         )
     except TelegramBadRequest:
@@ -1723,12 +2543,14 @@ async def cb_mode(cb: types.CallbackQuery):
     await cb.answer()
 
 
+# --- настройки ---
+
 @user_router.message(Command("settings"))
 @user_router.message(F.text.in_(BTN_SETTINGS))
 async def cmd_settings(message: types.Message):
-    lang, buttons_on, think = await get_prefs(message.from_user.id)
+    prefs = await get_prefs(message.from_user.id)
     await message.answer(
-        t(lang, "settings"), parse_mode="HTML", reply_markup=settings_kb(lang, buttons_on, think)
+        t(prefs.lang, "settings"), parse_mode="HTML", reply_markup=settings_kb(prefs.lang, prefs)
     )
 
 
@@ -1736,26 +2558,26 @@ async def cmd_settings(message: types.Message):
 async def cb_settings(cb: types.CallbackQuery):
     uid = cb.from_user.id
     parts = cb.data.split(":")
-    lang, buttons_on, think = await get_prefs(uid)
+    prefs = await get_prefs(uid)
 
     if parts[1] == "lang" and len(parts) > 2 and parts[2] in LANGS:
-        if parts[2] != lang:
-            lang = parts[2]
-            await set_user_field(uid, "lang", lang)
+        if parts[2] != prefs.lang:
+            await set_user_field(uid, "lang", parts[2])
             # у reply-клавиатуры нельзя поменять текст кнопок — присылаем новую
             await bot.send_message(
-                cb.message.chat.id, t(lang, "lang_changed"), reply_markup=get_main_menu(lang)
+                cb.message.chat.id, t(parts[2], "lang_changed"), reply_markup=get_main_menu(parts[2])
             )
     elif parts[1] == "btns":
-        buttons_on = not buttons_on
-        await set_user_field(uid, "buttons", 1 if buttons_on else 0)
+        await set_user_field(uid, "buttons", 0 if prefs.buttons else 1)
+    elif parts[1] == "save":
+        await set_user_field(uid, "save_btn", 0 if prefs.save else 1)
     elif parts[1] == "think":
-        think = not think
-        await set_user_field(uid, "think", 1 if think else 0)
+        await set_user_field(uid, "think", 0 if prefs.think else 1)
 
+    prefs = await get_prefs(uid)
     try:
         await cb.message.edit_text(
-            t(lang, "settings"), parse_mode="HTML", reply_markup=settings_kb(lang, buttons_on, think)
+            t(prefs.lang, "settings"), parse_mode="HTML", reply_markup=settings_kb(prefs.lang, prefs)
         )
     except TelegramBadRequest:
         pass
@@ -1781,21 +2603,41 @@ async def cmd_myprompt(message: types.Message, command: CommandObject):
         await message.answer(t(lang, "myprompt_saved"))
 
 
+# --- инфо ---
+
 @user_router.message(F.text.in_(BTN_INFO))
 async def cmd_info(message: types.Message):
-    lang, _, think = await get_prefs(message.from_user.id)
+    uid = message.from_user.id
+    prefs = await get_prefs(uid)
+    lang = prefs.lang
     model = await get_setting("model", MODEL)
-    mode = await get_mode(message.from_user.id)
-    per_min, per_day = await get_limits()
-    limits = t(lang, "limits_fmt", pm=fmt_limit(per_min, lang), pd=fmt_limit(per_day, lang))
+    mode = await get_mode(uid)
+    memory = await get_memory_len()
+    used = await count_history(uid)
+    pinned = await count_pinned(uid)
+    if uid in ADMIN_IDS:
+        limits = t(lang, "limits_admin")
+    else:
+        per_min, per_day = await get_limits()
+        spent = await scalar(
+            "SELECT COUNT(*) FROM requests WHERE user_id=? AND ts>?", (uid, int(time.time()) - 86400)
+        )
+        limits = t(
+            lang, "limits_fmt", pm=fmt_limit(per_min, lang), pd=fmt_limit(per_day, lang), u=spent
+        )
     await message.answer(
         t(
             lang,
             "info",
             model=html.escape(model),
             mode=MODES[mode]["title"][lang],
-            think=t(lang, "think_deep" if think else "think_fast"),
-            n=MAX_HISTORY_LEN,
+            think=t(lang, "think_deep" if prefs.think else "think_fast"),
+            language=LANGS[lang],
+            used=used,
+            n=memory,
+            pairs=memory // 2,
+            pinned=pinned,
+            k=MAX_IMAGES,
             limits=limits,
         ),
         parse_mode="HTML",
@@ -1808,6 +2650,83 @@ async def cmd_ask(message: types.Message):
     await message.answer(t(lang, "ask"))
 
 
+# --- сохранённые сообщения ---
+
+def _preview(text: str, n: int = 140) -> str:
+    s = " ".join(text.split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+async def render_saved(uid: int, lang: str):
+    rows = await list_pinned(uid)
+    if not rows:
+        return t(lang, "saved_empty"), None
+    items = "\n\n".join(
+        f"<b>{i}.</b> {html.escape(_preview(r['content']))}" for i, r in enumerate(rows, 1)
+    )
+    text = t(lang, "saved_title", n=len(rows), max=PINNED_MAX, items=items)
+    b = InlineKeyboardBuilder()
+    for i, r in enumerate(rows, 1):
+        b.button(text=f"🗑 {i}", callback_data=f"sv:del:{r['id']}")
+    b.button(text=t(lang, "btn_del_all"), callback_data="sv:clr")
+    k = len(rows)
+    sizes = [5] * (k // 5) + ([k % 5] if k % 5 else []) + [1]
+    b.adjust(*sizes)
+    return text, b.as_markup()
+
+
+@user_router.message(Command("saved"))
+async def cmd_saved(message: types.Message):
+    uid = message.from_user.id
+    lang = await get_lang(uid)
+    text, kb = await render_saved(uid, lang)
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@user_router.callback_query(F.data.startswith("sv:"))
+async def cb_save(cb: types.CallbackQuery):
+    uid = cb.from_user.id
+    prefs = await get_prefs(uid)
+    lang = prefs.lang
+    parts = cb.data.split(":")
+    action = parts[1]
+
+    if action == "add":
+        content = await get_answer(uid, cb.message.message_id)
+        if content is None:
+            await cb.answer(t(lang, "save_gone"), show_alert=True)
+            return
+        status = await add_pinned(uid, content)
+        if status == "limit":
+            await cb.answer(t(lang, "save_limit", n=PINNED_MAX), show_alert=True)
+            return
+        regen = prefs.buttons and last_kb_msg.get(uid) == (cb.message.chat.id, cb.message.message_id)
+        try:
+            await cb.message.edit_reply_markup(reply_markup=answer_kb(lang, regen, "saved"))
+        except TelegramBadRequest:
+            pass
+        await cb.answer(t(lang, "save_ok" if status == "ok" else "save_dup"))
+        return
+
+    if action == "del" and len(parts) > 2 and parts[2].isdigit():
+        await db.execute("DELETE FROM pinned WHERE id=? AND user_id=?", (int(parts[2]), uid))
+        await db.commit()
+    elif action == "clr":
+        await db.execute("DELETE FROM pinned WHERE user_id=?", (uid,))
+        await db.commit()
+    else:
+        await cb.answer()
+        return
+    text, kb = await render_saved(uid, lang)
+    try:
+        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except TelegramBadRequest:
+        pass
+    await cb.answer(t(lang, "saved_deleted"))
+
+
+# --- «Повторить» / «Продолжить» ---
+
 @user_router.callback_query(F.data.in_({"re:regen", "re:cont"}))
 async def cb_retry(cb: types.CallbackQuery):
     uid = cb.from_user.id
@@ -1819,33 +2738,130 @@ async def cb_retry(cb: types.CallbackQuery):
 
     if cb.data == "re:regen":
         q = hist[-2]["content"]
-        image = None
-        tag = next((tg for tg in PHOTO_TAGS if q.startswith(tg)), None)
-        if tag:
-            image = last_image.get(uid)
-            if not image:
+        images = None
+        m = PHOTO_RE.match(q)
+        if m:
+            images = last_images.get(uid)
+            if not images:
                 await cb.answer(t(lang, "photo_gone"), show_alert=True)
                 return
-            q = q[len(tag):].strip()
+            q = q[m.end():].strip()
         await cb.answer()
-        await run_ai(cb.message.chat.id, uid, q, image_url=image, regen=True)
+        await run_ai(cb.message.chat.id, uid, q, images=images, regen=True)
     else:
         await cb.answer()
         await run_ai(cb.message.chat.id, uid, t(lang, "continue_text"))
 
 
+# --- «Стоп» ---
+
+@user_router.callback_query(F.data == "st:stop")
+async def cb_stop(cb: types.CallbackQuery):
+    uid = cb.from_user.id
+    gen = active_gens.get(uid)
+    if gen is None:
+        await cb.answer(t(await get_lang(uid), "stop_none"))
+        return
+    gen.stopped = True
+    if gen.task is not None and not gen.task.done():
+        gen.task.cancel()
+    await cb.answer()
+
+
+# --- экспорт диалога ---
+
+@user_router.message(Command("export"))
+async def cmd_export(message: types.Message):
+    uid = message.from_user.id
+    lang = await get_lang(uid)
+    hist = await load_history(uid)
+    pins = await list_pinned(uid)
+    if not hist and not pins:
+        await message.answer(t(lang, "export_empty"))
+        return
+    lines: list[str] = []
+    for m in hist:
+        who = t(lang, "export_you" if m["role"] == "user" else "export_ai")
+        lines.append(f"{who}:\n{m['content']}\n")
+    if pins:
+        lines.append(f"— {t(lang, 'export_saved')} —\n")
+        for i, r in enumerate(pins, 1):
+            lines.append(f"[{i}] {r['content']}\n")
+    data = "\n".join(lines).encode("utf-8")
+    name = f"dialog-{fmt_ts(int(time.time()), '%Y%m%d-%H%M')}.txt"
+    await bot.send_document(
+        message.chat.id,
+        BufferedInputFile(data, filename=name),
+        caption=t(lang, "export_caption", n=len(hist), m=await get_memory_len()),
+    )
+
+
+# --- фото и альбомы ---
+
+async def process_photos(chat_id: int, uid: int, photos: list, caption: str, over: int = 0):
+    """Скачивает фото и отправляет их ИИ одним запросом."""
+    lang = await get_lang(uid)
+    images: list[str] = []
+    last_err = None
+    for ph in photos:
+        try:
+            buf = await bot.download(ph)
+            images.append("data:image/jpeg;base64," + base64.b64encode(buf.read()).decode())
+        except Exception as e:
+            last_err = e
+            logging.warning("Не удалось скачать фото: %s", e)
+    if not images:
+        await bot.send_message(chat_id, t(lang, "photo_fail", e=last_err))
+        return
+    if over:
+        await bot.send_message(chat_id, t(lang, "album_limit", n=MAX_IMAGES))
+    caption = caption or t(lang, "photo_caption" if len(images) == 1 else "photo_caption_multi")
+    await run_ai(chat_id, uid, caption, images=images)
+
+
+async def flush_album(gid: str):
+    """Ждёт, пока доедут все фото альбома, и обрабатывает их одним запросом."""
+    buf = albums.get(gid)
+    if buf is None:
+        return
+    try:
+        while True:
+            pause = ALBUM_WAIT - (time.time() - buf["last"])
+            if pause <= 0:
+                break
+            await asyncio.sleep(max(pause, 0.05))
+    finally:
+        albums.pop(gid, None)
+    try:
+        await process_photos(buf["chat"], buf["uid"], buf["photos"], buf["caption"], buf["over"])
+    except Exception:
+        logging.exception("Ошибка при обработке альбома")
+
+
 @user_router.message(F.photo)
 async def handle_photo(message: types.Message):
-    lang = await get_lang(message.from_user.id)
-    try:
-        buf = await bot.download(message.photo[-1])
-        data = buf.read()
-    except Exception as e:
-        await message.answer(t(lang, "photo_fail", e=e))
+    uid = message.from_user.id
+    caption = (message.caption or "").strip()
+    gid = message.media_group_id
+    if not gid:
+        await process_photos(message.chat.id, uid, [message.photo[-1]], caption)
         return
-    url = "data:image/jpeg;base64," + base64.b64encode(data).decode()
-    caption = (message.caption or "").strip() or t(lang, "photo_caption")
-    await run_ai(message.chat.id, message.from_user.id, caption, image_url=url)
+
+    # Telegram присылает каждое фото альбома отдельным сообщением — собираем их вместе
+    buf = albums.get(gid)
+    if buf is None:
+        buf = albums[gid] = {
+            "photos": [], "caption": "", "last": time.time(),
+            "chat": message.chat.id, "uid": uid, "over": 0,
+        }
+        spawn(flush_album(gid))
+    if len(buf["photos"]) < MAX_IMAGES:
+        buf["photos"].append(message.photo[-1])
+    else:
+        buf["over"] += 1
+    if caption and not buf["caption"]:
+        buf["caption"] = caption
+    buf["last"] = time.time()
 
 
 @user_router.message(F.voice)
@@ -1883,11 +2899,24 @@ dp.include_router(admin_router)
 dp.include_router(user_router)
 
 
+async def setup_commands():
+    """Меню команд Telegram (кнопка «/»): на русском для русского клиента, иначе на английском."""
+    try:
+        await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS["en"]])
+        for code, items in COMMANDS.items():
+            await bot.set_my_commands(
+                [BotCommand(command=c, description=d) for c, d in items], language_code=code
+            )
+    except Exception:
+        logging.exception("Не удалось задать меню команд (это не критично)")
+
+
 async def main():
     await init_db()
     if not ADMIN_IDS:
         logging.warning("ADMIN_IDS не задан — админ-панель недоступна. Узнай ID командой /myid.")
     await bot.delete_webhook(drop_pending_updates=True)
+    await setup_commands()
     logging.info("🚀 Бот запущен!")
     try:
         await dp.start_polling(bot)
