@@ -6,6 +6,7 @@ import logging
 import tempfile
 import time
 import html
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -94,6 +95,11 @@ ADS_EVERY = env_int("ADS_EVERY", 6)                 # показывать ре�
 ADS_MIN_GAP = env_int("ADS_MIN_GAP", 600)           # не чаще одного раза в N секунд на человека
 ADS_API = "https://api.adsgram.ai/advbot"
 
+# --- приглашения друзей ---
+REF_BONUS = env_int("REF_BONUS", 20)      # сколько запросов в сутки получает каждый (приглашённый и пригласивший)
+REF_MAX = env_int("REF_MAX", 25)          # за скольких друзей пригласивший получает бонус
+SRC_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")   # метки источников в ссылке: t.me/бот?start=метка
+
 # ID админов через запятую, например: ADMIN_IDS=123456789 (свой ID покажет команда /myid)
 ADMIN_IDS = {
     int(x)
@@ -177,10 +183,24 @@ TEXTS = {
             "/settings — язык, кнопки под ответом, стиль ответа\n"
             "/saved — сохранённые сообщения\n"
             "/export — выгрузить диалог файлом\n"
+            "/invite — пригласить друзей и получить бонус\n"
             "/clear — очистить диалог (с подтверждением)\n"
             "/myprompt — свои инструкции для ИИ\n"
             "/myid — твой Telegram ID"
         ),
+        "invite": (
+            "🎁 <b>Пригласи друзей — получи больше запросов</b>\n\n"
+            "Когда друг по твоей ссылке задаст боту первый вопрос, вы оба получите "
+            "<b>+{b}</b> запросов в сутки насовсем (бонус за {m} друзей).\n\n"
+            "🔗 Твоя ссылка:\n<code>{link}</code>\n\n"
+            "👥 Перешли по ссылке: <b>{n}</b>, из них уже пользуются: <b>{paid}</b>\n"
+            "🎁 Твой бонус: <b>+{bonus}</b> запросов в сутки"
+        ),
+        "invite_unavailable": "Не получилось сформировать ссылку, попробуй чуть позже.",
+        "btn_share": "📤 Поделиться ботом",
+        "share_text": "Бесплатный ИИ-помощник в Telegram: отвечает на вопросы, пишет код, переводит, смотрит фото 🤖",
+        "ref_welcome": "🎉 Добро пожаловать! Ты пришёл по приглашению — тебе добавлено <b>+{b}</b> запросов в сутки.",
+        "ref_notify": "🎁 Твой друг начал пользоваться ботом! Тебе добавлено <b>+{b}</b> запросов в сутки. Подробнее: /invite",
         "ask": "💬 Задавай любой вопрос или пришли фото — можно сразу несколько. Я готов!",
         # --- режимы ---
         "mode_choose": (
@@ -366,10 +386,24 @@ TEXTS = {
             "/settings — language, buttons under answers, answer style\n"
             "/saved — saved messages\n"
             "/export — download the chat as a file\n"
+            "/invite — invite friends and get a bonus\n"
             "/clear — clear the chat (with confirmation)\n"
             "/myprompt — your own instructions for the AI\n"
             "/myid — your Telegram ID"
         ),
+        "invite": (
+            "🎁 <b>Invite friends — get more requests</b>\n\n"
+            "When a friend opens the bot with your link and asks their first question, you both get "
+            "<b>+{b}</b> requests per day for good (bonus for up to {m} friends).\n\n"
+            "🔗 Your link:\n<code>{link}</code>\n\n"
+            "👥 Opened the link: <b>{n}</b>, already using the bot: <b>{paid}</b>\n"
+            "🎁 Your bonus: <b>+{bonus}</b> requests per day"
+        ),
+        "invite_unavailable": "Couldn't build the link, please try again in a moment.",
+        "btn_share": "📤 Share the bot",
+        "share_text": "A free AI assistant in Telegram: answers questions, writes code, translates, looks at photos 🤖",
+        "ref_welcome": "🎉 Welcome! You joined by invitation — <b>+{b}</b> requests per day were added for you.",
+        "ref_notify": "🎁 Your friend started using the bot! <b>+{b}</b> requests per day were added for you. Details: /invite",
         "ask": "💬 Ask me anything or send a photo — several at once is fine. I'm ready!",
         "mode_choose": (
             "🎭 <b>Choose a mode</b>\n\n{list}\n\n"
@@ -607,6 +641,7 @@ COMMANDS = {
         ("settings", "Настройки"),
         ("saved", "Сохранённые сообщения"),
         ("export", "Выгрузить диалог файлом"),
+        ("invite", "Пригласить друзей (бонус)"),
         ("clear", "Очистить диалог"),
         ("myprompt", "Свои инструкции для ИИ"),
     ],
@@ -617,6 +652,7 @@ COMMANDS = {
         ("settings", "Settings"),
         ("saved", "Saved messages"),
         ("export", "Download the chat as a file"),
+        ("invite", "Invite friends (bonus)"),
         ("clear", "Clear the chat"),
         ("myprompt", "Your own AI instructions"),
     ],
@@ -811,7 +847,11 @@ async def init_db():
             buttons INTEGER DEFAULT 0,
             think INTEGER DEFAULT 0,
             custom_prompt TEXT,
-            save_btn INTEGER DEFAULT 0
+            save_btn INTEGER DEFAULT 0,
+            ref_by INTEGER,
+            ref_paid INTEGER DEFAULT 0,
+            bonus INTEGER DEFAULT 0,
+            src TEXT
         );
         CREATE TABLE IF NOT EXISTS history(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -856,9 +896,16 @@ async def init_db():
         ("think", "INTEGER DEFAULT 0"),
         ("custom_prompt", "TEXT"),
         ("save_btn", "INTEGER DEFAULT 0"),
+        ("ref_by", "INTEGER"),
+        ("ref_paid", "INTEGER DEFAULT 0"),
+        ("bonus", "INTEGER DEFAULT 0"),
+        ("src", "TEXT"),
     ):
         if name not in cols:
             await db.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
+            if name == "src":
+                # все, кто пришёл до появления учёта источников, — отдельная группа
+                await db.execute("UPDATE users SET src='old'")
     await db.commit()
     STATE["maintenance"] = (await get_setting("maintenance", "0")) == "1"
     logging.info(f"База данных: {DB_PATH}")
@@ -1153,6 +1200,10 @@ async def get_limits() -> tuple[int, int]:
     return per_min, per_day
 
 
+async def get_bonus(user_id: int) -> int:
+    return int(await scalar("SELECT COALESCE(bonus, 0) FROM users WHERE id=?", (user_id,)) or 0)
+
+
 def fmt_limit(n: int, lang: str = "ru") -> str:
     return str(n) if n > 0 else t(lang, "unlimited")
 
@@ -1171,6 +1222,8 @@ async def check_limit(user_id: int, lang: str) -> str | None:
     if user_id in ADMIN_IDS:
         return None
     per_min, per_day = await get_limits()
+    if per_day > 0:
+        per_day += await get_bonus(user_id)
     now = int(time.time())
     if per_min > 0:
         cnt = await scalar(
@@ -1386,6 +1439,15 @@ def waiting_text(lang: str, gen: Gen) -> str:
     return f"{gen.note}\n{txt}" if gen.note else txt
 
 
+async def drop_stop_kb(chat_id: int, message_id: int, kb=None):
+    """Страховка: после ответа гарантированно убираем кнопку «Стоп» (или ставим нужные кнопки ответа).
+    Нужна на случай, если последняя правка из «тикера» долетела до Telegram позже финальной."""
+    try:
+        await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=kb)
+    except Exception:
+        pass  # «message is not modified» — кнопки уже такие, как надо
+
+
 async def run_ai(
     chat_id: int,
     user_id: int,
@@ -1580,6 +1642,7 @@ async def _run_locked(chat_id: int, user_id: int, question: str, images: list | 
             await bot.edit_message_text(msg[:4096], chat_id=chat_id, message_id=sent.message_id)
         except Exception:
             await bot.send_message(chat_id, msg[:4096])
+        await drop_stop_kb(chat_id, sent.message_id)
         return
 
     # ответ обрывался на середине / его остановили: показываем, что успели получить, и пометку
@@ -1591,9 +1654,9 @@ async def _run_locked(chat_id: int, user_id: int, question: str, images: list | 
 
     # --- доставка с форматированием (и кнопками, если включены в настройках) ---
     last_id = sent.message_id
+    chunks = split_markdown(display)
+    kb = answer_kb(lang, prefs.buttons, "save" if prefs.save else None)
     try:
-        chunks = split_markdown(display)
-        kb = answer_kb(lang, prefs.buttons, "save" if prefs.save else None)
         await with_retry(
             edit_md, chat_id, sent.message_id, chunks[0], kb if len(chunks) == 1 else None
         )
@@ -1605,6 +1668,8 @@ async def _run_locked(chat_id: int, user_id: int, question: str, images: list | 
     except Exception:
         logging.exception("Не удалось доставить ответ")
         await log_error(user_id, "Не удалось доставить ответ в Telegram")
+    # у первого сообщения ответа «Стоп» должен пропасть в любом случае
+    await drop_stop_kb(chat_id, sent.message_id, kb if len(chunks) == 1 else None)
 
     # --- сохраняем в память ---
     if prefs.save:
@@ -1615,11 +1680,88 @@ async def _run_locked(chat_id: int, user_id: int, question: str, images: list | 
     if images:
         last_images[user_id] = images
     if not gen.stopped and err is None and not regen:
+        await grant_ref_reward(user_id)
         spawn(maybe_show_ad(chat_id, user_id, lang))
+
+
+# ================= ПРИГЛАШЕНИЯ И ИСТОЧНИКИ =================
+
+_me = {"username": ""}
+
+
+async def bot_username() -> str:
+    if not _me["username"]:
+        try:
+            _me["username"] = (await bot.get_me()).username or ""
+        except Exception:
+            logging.warning("Не удалось узнать username бота")
+    return _me["username"]
+
+
+async def get_ref_cfg() -> tuple[int, int]:
+    """(бонус в сутки за приглашение, макс. число друзей с бонусом) — меняется в админке."""
+    try:
+        bonus = max(0, int(await get_setting("ref_bonus", str(REF_BONUS))))
+    except ValueError:
+        bonus = REF_BONUS
+    try:
+        mx = max(0, int(await get_setting("ref_max", str(REF_MAX))))
+    except ValueError:
+        mx = REF_MAX
+    return bonus, mx
+
+
+async def register_start(uid: int, payload: str) -> None:
+    """Запоминает, откуда пришёл НОВЫЙ пользователь: по приглашению (ref_<id>) или по метке источника."""
+    cur = await db.execute("SELECT src, joined FROM users WHERE id=?", (uid,))
+    row = await cur.fetchone()
+    if not row or row["src"] is not None:
+        return
+    if row["joined"] and row["joined"] < int(time.time()) - 600:
+        # давно в боте, но источник не записан — не считаем новым
+        await db.execute("UPDATE users SET src='old' WHERE id=?", (uid,))
+        await db.commit()
+        return
+    payload = (payload or "").strip()
+    src, ref = "direct", None
+    if payload.startswith("ref_") and payload[4:].isdigit():
+        src = "ref"
+        r = int(payload[4:])
+        if r != uid and await scalar("SELECT COUNT(*) FROM users WHERE id=?", (r,)):
+            ref = r
+    elif SRC_RE.match(payload):
+        src = payload.lower()
+    await db.execute("UPDATE users SET src=?, ref_by=? WHERE id=?", (src, ref, uid))
+    await db.commit()
+
+
+async def grant_ref_reward(uid: int):
+    """После ПЕРВОГО успешного ответа приглашённого оба получают бонус к суточному лимиту."""
+    cur = await db.execute("SELECT ref_by, ref_paid FROM users WHERE id=?", (uid,))
+    row = await cur.fetchone()
+    if not row or not row["ref_by"] or row["ref_paid"]:
+        return
+    ref = row["ref_by"]
+    bonus, mx = await get_ref_cfg()
+    await db.execute("UPDATE users SET ref_paid=1, bonus=COALESCE(bonus,0)+? WHERE id=?", (bonus, uid))
+    paid = await scalar("SELECT COUNT(*) FROM users WHERE ref_by=? AND ref_paid=1", (ref,))
+    rewarded = paid <= mx
+    if rewarded:
+        await db.execute("UPDATE users SET bonus=COALESCE(bonus,0)+? WHERE id=?", (bonus, ref))
+    await db.commit()
+    if bonus <= 0:
+        return
+    try:
+        await bot.send_message(uid, t(await get_lang(uid), "ref_welcome", b=bonus))
+        if rewarded:
+            await bot.send_message(ref, t(await get_lang(ref), "ref_notify", b=bonus))
+    except Exception:
+        pass  # человек мог заблокировать бота — бонус всё равно начислен
 
 
 # ================= РЕКЛАМА (AdsGram) =================
 
+ads_last = {"why": "", "ts": 0}   # почему AdsGram в последний раз не дал рекламу (видно в админке)
 ads_state: dict[int, dict] = {}   # user_id -> {"n": ответов с прошлой рекламы, "last": время последнего показа}
 
 
@@ -1643,12 +1785,22 @@ async def fetch_ad(user_id: int, lang: str) -> dict | None:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as sess:
             async with sess.get(ADS_API, params=params) as r:
                 if r.status != 200:
+                    body = ""
+                    try:
+                        body = (await r.text())[:200]
+                    except Exception:
+                        pass
+                    ads_last.update(why=f"HTTP {r.status} {body}".strip(), ts=int(time.time()))
+                    logging.warning("AdsGram: ответ %s %s", r.status, body)
                     return None
                 data = await r.json(content_type=None)
     except Exception as e:
+        ads_last.update(why=f"{type(e).__name__}: {e}", ts=int(time.time()))
         logging.warning("AdsGram: не удалось получить рекламу: %s: %s", type(e).__name__, e)
         return None
     if not isinstance(data, dict) or not data.get("text_html"):
+        ads_last.update(why=f"пустой ответ: {str(data)[:200]}", ts=int(time.time()))
+        logging.warning("AdsGram: пустой ответ: %s", str(data)[:200])
         return None
     return data
 
@@ -1726,6 +1878,8 @@ def admin_kb():
     b.button(text="🧮 Память", callback_data="adm:mem")
     b.button(text="⏱ Лимиты", callback_data="adm:limits")
     b.button(text="💰 Реклама", callback_data="adm:ads")
+    b.button(text="🔗 Источники", callback_data="adm:src")
+    b.button(text="🎁 Приглашения", callback_data="adm:ref")
     b.button(text="⚡ Скорость", callback_data="adm:speed_menu")
     b.button(text="👤 Пользователь", callback_data="adm:userinfo")
     b.button(text="💾 Бэкап БД", callback_data="adm:backup")
@@ -1806,6 +1960,74 @@ async def memory_text() -> str:
     )
 
 
+def ref_kb():
+    b = InlineKeyboardBuilder()
+    b.button(text="✏️ Запросов в день", callback_data="adm:ref_bonus")
+    b.button(text="✏️ Макс. друзей", callback_data="adm:ref_max")
+    b.button(text="⬅️ Назад", callback_data="adm:menu")
+    b.adjust(2, 1)
+    return b.as_markup()
+
+
+async def ref_text() -> str:
+    bonus, mx = await get_ref_cfg()
+    refs = await scalar("SELECT COUNT(*) FROM users WHERE ref_by IS NOT NULL")
+    paid = await scalar("SELECT COUNT(*) FROM users WHERE ref_paid=1")
+    top = await db.execute(
+        "SELECT ref_by, COUNT(*) AS n FROM users WHERE ref_paid=1 GROUP BY ref_by ORDER BY n DESC LIMIT 5"
+    )
+    top_rows = await top.fetchall()
+    top_text = "\n".join(f"{i}. <code>{r['ref_by']}</code> — {r['n']}" for i, r in enumerate(top_rows, 1)) or "—"
+    state = f"+{bonus} запросов в сутки" if bonus > 0 else "выключены (0)"
+    return (
+        "🎁 <b>Приглашения друзей</b>\n\n"
+        f"Бонус за приглашение: <b>{state}</b> — получает и друг, и пригласивший, навсегда.\n"
+        f"Максимум друзей с бонусом у одного человека: <b>{mx}</b> (приглашённый получает бонус в любом случае).\n\n"
+        "Бонус прибавляется к суточному лимиту (⏱ Лимиты) и начисляется после первого ответа друга. "
+        "Новые значения действуют только на будущие приглашения — уже выданные бонусы не меняются.\n\n"
+        f"Перешли по ссылкам: {refs}, начали пользоваться: {paid}\n\n"
+        f"🏆 Лучшие по приглашениям:\n{top_text}"
+    )
+
+
+def src_kb():
+    b = InlineKeyboardBuilder()
+    b.button(text="🔄 Обновить", callback_data="adm:src")
+    b.button(text="⬅️ Назад", callback_data="adm:menu")
+    b.adjust(2)
+    return b.as_markup()
+
+
+async def sources_text() -> str:
+    week = int(time.time()) - 7 * 86400
+    cur = await db.execute(
+        "SELECT COALESCE(src, 'direct') AS s, COUNT(*) AS n, "
+        "SUM(CASE WHEN msgs > 0 THEN 1 ELSE 0 END) AS act, "
+        "SUM(CASE WHEN joined > ? THEN 1 ELSE 0 END) AS d7 "
+        "FROM users GROUP BY s ORDER BY n DESC LIMIT 15",
+        (week,),
+    )
+    rows = await cur.fetchall()
+    names = {"old": "до учёта источников", "direct": "напрямую (без метки)", "ref": "по приглашению друзей"}
+    lines = "\n".join(
+        f"• <b>{html.escape(names.get(r['s'], r['s']))}</b> — всего {r['n']}, писали боту {r['act'] or 0}, "
+        f"новых за 7 дн: {r['d7'] or 0}"
+        for r in rows
+    ) or "—"
+    refs = await scalar("SELECT COUNT(*) FROM users WHERE ref_by IS NOT NULL")
+    refs_paid = await scalar("SELECT COUNT(*) FROM users WHERE ref_paid=1")
+    uname = await bot_username()
+    return (
+        "🔗 <b>Откуда приходят пользователи</b>\n\n"
+        f"{lines}\n\n"
+        f"🎁 Приглашений по ссылкам друзей: {refs}, начали пользоваться: {refs_paid}\n\n"
+        "<b>Как отслеживать рекламу.</b> Для каждого места, где рекламируешь бота, дай свою ссылку с меткой:\n"
+        f"<code>https://t.me/{uname or 'твой_бот'}?start=метка</code>\n"
+        "Метка — латиница, цифры, _ и -, до 32 символов (например <code>vc_post</code>, "
+        "<code>tgads1</code>). Считаются только новые пользователи, которые нажали «Старт»."
+    )
+
+
 ADS_PRESETS = (3, 5, 6, 10, 20)
 
 
@@ -1840,7 +2062,9 @@ async def ads_text() -> str:
         f"{ADS_MIN_GAP // 60} мин на человека. Админам реклама не показывается.\n\n"
         f"Показов за 24ч: <b>{shown_day}</b> ({people} чел.), всего: {shown}\n"
         f"За 24ч у AdsGram не нашлось рекламы: {empty_day} раз\n\n"
-        "Доход смотри в кабинете partner.adsgram.ai."
+        + (f"Последняя причина «нет рекламы»: <code>{html.escape(ads_last['why'])}</code> "
+           f"({fmt_ts(ads_last['ts'])})\n\n" if ads_last["why"] else "")
+        + "Доход смотри в кабинете partner.adsgram.ai."
     )
 
 
@@ -2167,6 +2391,30 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
             f"<b>{await get_history_chars()}</b>.\n/cancel — отмена",
         )
 
+    elif action == "ref":
+        await state.clear()
+        await show(cb, await ref_text(), ref_kb())
+
+    elif action in ("ref_bonus", "ref_max"):
+        await state.set_state(Admin.waiting)
+        await state.update_data(action=action)
+        bonus, mx = await get_ref_cfg()
+        if action == "ref_bonus":
+            await show(
+                cb,
+                f"Пришли, сколько запросов в сутки давать за приглашение (0 — бонус выключить). "
+                f"Сейчас: <b>{bonus}</b>.\n/cancel — отмена",
+            )
+        else:
+            await show(
+                cb,
+                f"Пришли максимум друзей, за которых пригласивший получает бонус (0 — только друг получает бонус). "
+                f"Сейчас: <b>{mx}</b>.\n/cancel — отмена",
+            )
+
+    elif action == "src":
+        await show(cb, await sources_text(), src_kb())
+
     elif action == "ads":
         await show(cb, await ads_text(), ads_kb(await ads_enabled(), await get_ads_every()))
 
@@ -2371,6 +2619,15 @@ async def admin_input(message: types.Message, state: FSMContext):
             await memory_text(), parse_mode="HTML", reply_markup=memory_kb(await get_memory_len())
         )
 
+    elif action in ("ref_bonus", "ref_max"):
+        top = 10000 if action == "ref_bonus" else 1000
+        if not text.isdigit() or int(text) > top:
+            await message.answer(f"Нужно целое число от 0 до {top}. Попробуй ещё раз или /cancel.")
+            return
+        await set_setting(action, str(int(text)))
+        await state.clear()
+        await message.answer(await ref_text(), parse_mode="HTML", reply_markup=ref_kb())
+
     elif action in ("limit_min", "limit_day"):
         if not text.isdigit():
             await message.answer("Нужно целое число (0 — без лимита). Попробуй ещё раз или /cancel.")
@@ -2430,7 +2687,8 @@ async def cmd_admin_denied(message: types.Message):
 
 
 @user_router.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, command: CommandObject):
+    await register_start(message.from_user.id, command.args or "")
     lang = await get_lang(message.from_user.id)
     model = await get_setting("model", MODEL)
     await message.answer(
@@ -2444,6 +2702,31 @@ async def cmd_start(message: types.Message):
         ),
         parse_mode="HTML",
         reply_markup=get_main_menu(lang),
+    )
+
+
+@user_router.message(Command("invite"))
+async def cmd_invite(message: types.Message):
+    uid = message.from_user.id
+    lang = await get_lang(uid)
+    uname = await bot_username()
+    if not uname:
+        await message.answer(t(lang, "invite_unavailable"))
+        return
+    link = f"https://t.me/{uname}?start=ref_{uid}"
+    invited = await scalar("SELECT COUNT(*) FROM users WHERE ref_by=?", (uid,))
+    paid = await scalar("SELECT COUNT(*) FROM users WHERE ref_by=? AND ref_paid=1", (uid,))
+    b = InlineKeyboardBuilder()
+    b.button(
+        text=t(lang, "btn_share"),
+        url=f"https://t.me/share/url?url={quote(link, safe='')}&text={quote(t(lang, 'share_text'))}",
+    )
+    ref_bonus, ref_max = await get_ref_cfg()
+    await message.answer(
+        t(lang, "invite", b=ref_bonus, m=ref_max, link=link, n=invited, paid=paid, bonus=await get_bonus(uid)),
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+        disable_web_page_preview=True,
     )
 
 
@@ -2619,6 +2902,8 @@ async def cmd_info(message: types.Message):
         limits = t(lang, "limits_admin")
     else:
         per_min, per_day = await get_limits()
+        if per_day > 0:
+            per_day += await get_bonus(uid)
         spent = await scalar(
             "SELECT COUNT(*) FROM requests WHERE user_id=? AND ts>?", (uid, int(time.time()) - 86400)
         )
