@@ -21,6 +21,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BotCommand, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from openai import AsyncOpenAI
+from duckduckgo_search import DDGS
 
 logging.basicConfig(level=logging.INFO)
 
@@ -50,57 +51,39 @@ if not TELEGRAM_TOKEN or not AI_API_KEY:
 
 AI_BASE_URL = os.getenv("AI_BASE_URL", "https://ai.starimg.ru/v1")
 MODEL = os.getenv("ID_MODEL", "deepseek-v4.1-flash")
-# Модель для обработки фото (должна принимать изображения)
 VISION_MODEL = os.getenv("VISION_MODEL", "deepseek-v4.1-flash")
-# Модель распознавания речи. Если не задана — голосовые отключены.
 STT_MODEL = os.getenv("STT_MODEL", "")
 
-# --- скорость и надёжность ---
-# Уровень «рассуждения» модели для стилей «Быстро» / «Вдумчиво»:
-# default (не передавать параметр), low, medium, high, xhigh. Меняется в админке: ⚡ Скорость.
 EFFORT_FAST = os.getenv("EFFORT_FAST", "low")
 EFFORT_THINK = os.getenv("EFFORT_THINK", "high")
-# Резервная модель: включается, если основная не ответила (таймаут/ошибка). «off» — отключить.
 FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "deepseek-v4-flash")
-AI_TIMEOUT = env_float("AI_TIMEOUT", 150.0)         # макс. пауза без данных от модели, сек
-TOTAL_TIMEOUT = env_float("TOTAL_TIMEOUT", 300.0)   # макс. общее время одного запроса, сек
-MAX_TOKENS = env_int("MAX_TOKENS", 0)               # 0 = без ограничения длины ответа
+AI_TIMEOUT = env_float("AI_TIMEOUT", 150.0)
+TOTAL_TIMEOUT = env_float("TOTAL_TIMEOUT", 300.0)
+MAX_TOKENS = env_int("MAX_TOKENS", 0)
 
-# --- память диалога ---
-# Бот хранит И вопросы пользователя, И ответы ИИ (каждое — отдельное «сообщение»),
-# поэтому 30 сообщений = 15 пар «вопрос — ответ». Размер меняется в админке: 🧮 Память.
 MEMORY_DEFAULT = env_int("MEMORY_LEN", 30)
 MEMORY_MIN, MEMORY_MAX = 2, 200
-# Лимит объёма истории в одном запросе (символов). Если диалог длиннее — самые старые
-# сообщения не отправляются модели (так ответы быстрее). Меняется в админке.
 HISTORY_CHARS = env_int("HISTORY_CHARS", 40000)
 
-# --- сохранённые сообщения («📌 Сохранить») ---
-PINNED_MAX = env_int("PINNED_MAX", 10)              # сколько сообщений можно сохранить
-PINNED_ITEM_CHARS = 4000                            # макс. длина одного сохранённого сообщения
-PINNED_TOTAL_CHARS = 8000                           # сколько символов сохранённого уходит модели
-ANSWERS_KEEP = 40                                   # сколько последних ответов помнить для кнопки «Сохранить»
+PINNED_MAX = env_int("PINNED_MAX", 10)
+PINNED_ITEM_CHARS = 4000
+PINNED_TOTAL_CHARS = 8000
+ANSWERS_KEEP = 40
 
-# --- фото и очередь ---
-MAX_IMAGES = env_int("MAX_IMAGES", 6)               # макс. фото в одном сообщении/альбоме
-ALBUM_WAIT = env_float("ALBUM_WAIT", 1.2)           # сколько ждать остальные фото альбома, сек
-MAX_QUEUE = env_int("MAX_QUEUE", 2)                 # сколько запросов одного человека могут ждать очереди
+MAX_IMAGES = env_int("MAX_IMAGES", 6)
+ALBUM_WAIT = env_float("ALBUM_WAIT", 1.2)
+MAX_QUEUE = env_int("MAX_QUEUE", 2)
 
-# --- реклама AdsGram (https://adsgram.ai) ---
-# ID рекламного блока типа «Бот» из кабинета AdsGram: можно «bot-53426» или просто 53426.
-# Пока переменная пустая — реклама полностью выключена.
 ADSGRAM_BLOCK_ID = re.sub(r"\D", "", os.getenv("ADSGRAM_BLOCK_ID", ""))
-ADSGRAM_TOKEN = os.getenv("ADSGRAM_TOKEN", "")      # токен аккаунта (если AdsGram его требует; профиль в кабинете)
-ADS_EVERY = env_int("ADS_EVERY", 6)                 # показывать рекламу после каждого N-го ответа (меняется в админке)
-ADS_MIN_GAP = env_int("ADS_MIN_GAP", 600)           # не чаще одного раза в N секунд на человека
+ADSGRAM_TOKEN = os.getenv("ADSGRAM_TOKEN", "")
+ADS_EVERY = env_int("ADS_EVERY", 6)
+ADS_MIN_GAP = env_int("ADS_MIN_GAP", 600)
 ADS_API = "https://api.adsgram.ai/advbot"
 
-# --- приглашения друзей ---
-REF_BONUS = env_int("REF_BONUS", 20)      # сколько запросов в сутки получает каждый (приглашённый и пригласивший)
-REF_MAX = env_int("REF_MAX", 25)          # за скольких друзей пригласивший получает бонус
-SRC_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")   # метки источников в ссылке: t.me/бот?start=метка
+REF_BONUS = env_int("REF_BONUS", 20)
+REF_MAX = env_int("REF_MAX", 25)
+SRC_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
-# ID админов через запятую, например: ADMIN_IDS=123456789 (свой ID покажет команда /myid)
 ADMIN_IDS = {
     int(x)
     for x in os.getenv("ADMIN_IDS", os.getenv("ADMIN_ID", "")).replace(" ", "").split(",")
@@ -113,20 +96,17 @@ AVAILABLE_MODELS = [
     if m.strip()
 ]
 
-# Лимиты запросов на человека (0 = без лимита). Админ может менять их в панели.
 RATE_PER_MIN = env_int("RATE_PER_MIN", 5)
 RATE_PER_DAY = env_int("RATE_PER_DAY", 100)
 
-# База данных. На Amvera постоянное хранилище смонтировано в /data
 DB_PATH = os.getenv("DB_PATH") or ("/data/bot.db" if os.path.isdir("/data") else "bot.db")
-TZ_HOURS = env_int("TZ_HOURS", 4)                   # часовой пояс для времени в админке
+TZ_HOURS = env_int("TZ_HOURS", 4)
 
-EDIT_INTERVAL = env_float("EDIT_INTERVAL", 1.0)     # как часто обновлять сообщение при стриминге (сек)
-CHUNK = 3500                                        # размер куска текста для одного сообщения Telegram
-CUSTOM_PROMPT_MAX = 1000                            # макс. длина личных инструкций пользователя
+EDIT_INTERVAL = env_float("EDIT_INTERVAL", 1.0)
+CHUNK = 3500
+CUSTOM_PROMPT_MAX = 1000
 
-# Пометка фото-вопроса в истории: «[Photo]» или «[Photo x3]» (старый вариант «[Фото]» тоже понимаем)
-PHOTO_RE = re.compile(r"^\[(?:Photo|Фото)(?: x(\d+))?\]\s*")
+PHOTO_RE = re.compile(r"^\[(?:Photo\vert{}Фото)(?: x(\d+))?\]\s*")
 
 
 def photo_tag(n: int) -> str:
@@ -146,13 +126,10 @@ TEST_MESSAGES = [
     {"role": "user", "content": "Ответь одним словом: ок"},
 ]
 
-# ----------------- ЛОКАЛИЗАЦИЯ (интерфейс пользователя) -----------------
-# [i18n-start]
 LANGS = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English"}
 
 TEXTS = {
     "ru": {
-        # --- кнопки главного меню (тексты не менять: по ним бот узнаёт нажатия) ---
         "btn_ask": "🤖 Задать вопрос ИИ",
         "btn_mode": "🎭 Режим",
         "btn_clear": "📝 Очистить диалог",
@@ -160,183 +137,85 @@ TEXTS = {
         "btn_settings": "⚙️ Настройки",
         "btn_invite": "🎁 Пригласить",
         "btn_help": "❓ Помощь",
-        "menu_updated": "✨ В меню появились кнопки «🎁 Пригласить» (бонусные запросы за друзей) и «❓ Помощь» (все возможности и команды).",
+        "menu_updated": "✨ В меню появились кнопки «🎁 Пригласить» и «❓ Помощь».",
         "banned": "🚫 Доступ к боту ограничен.",
         "maintenance": "🔧 Бот на техническом обслуживании. Загляни чуть позже.",
-        # --- приветствие и справка ---
         "start": (
             "👋 <b>Привет, {name}!</b>\n\n"
             "Я — ИИ-ассистент на базе <b>{model}</b>. Отвечаю на вопросы, пишу и правлю тексты, "
-            "помогаю с кодом, перевожу и разбираю изображения.\n\n"
-            "✨ <b>Что я умею</b>\n"
-            "• 💬 Помню разговор — последние {n} сообщений (вопросы и ответы вместе)\n"
-            "• 🎭 Меняю роль: переводчик, программист, редактор — кнопка «Режим»\n"
-            "• 🖼 Смотрю фото и альбомы — до {k} изображений за раз\n"
-            "• 📌 Сохраняю важное: включи «Сохранить» в настройках — сообщение останется в памяти, "
-            "пока ты не очистишь диалог\n"
-            "• ⏹ Ответ можно остановить кнопкой «Стоп»\n"
-            "• 📄 Выгружаю диалог файлом — /export\n"
-            "• 🎁 Приглашай друзей и получай бонусные запросы — кнопка «Пригласить»\n\n"
-            "🚀 <b>С чего начать</b>\n"
-            "Напиши вопрос или пришли фото. Меню внизу: режимы, настройки, очистка диалога, "
-            "приглашение друзей и «Помощь» со всеми командами."
+            "помогаю с кодом, перевожу и разбираю изображения."
         ),
-        "help": (
-            "❓ <b>Справка</b>\n\n"
-            "<b>Как пользоваться</b>\n"
-            "Пиши вопрос обычным текстом или присылай фото — можно сразу несколько (до {k}), "
-            "с подписью или без. Ответ приходит по мере написания, его можно остановить кнопкой «⏹ Стоп». "
-            "Если отправишь несколько сообщений подряд, отвечу на них по очереди.\n\n"
-            "<b>Память</b>\n"
-            "Я помню последние {n} сообщений — и твои вопросы, и мои ответы. Фото в памяти остаётся "
-            "только пометкой, сама картинка не хранится. Важное можно закрепить кнопкой «📌 Сохранить» "
-            "(включается в настройках): такие сообщения остаются, пока ты не очистишь диалог. "
-            "При смене режима диалог сбрасывается, сохранённое остаётся.\n\n"
-            "<b>Кнопки меню</b>\n"
-            "🤖 Задать вопрос · 🎭 Режим · 📝 Очистить диалог (с подтверждением) · ℹ Инфо · "
-            "⚙️ Настройки · 🎁 Пригласить · ❓ Помощь\n\n"
-            "<b>Команды</b>\n"
-            "/mode — выбрать режим (роль ИИ)\n"
-            "/settings — язык, кнопки под ответом, кнопка «Сохранить», стиль ответа\n"
-            "/saved — сохранённые сообщения\n"
-            "/export — выгрузить диалог файлом\n"
-            "/invite — пригласить друзей и получить бонус к лимиту\n"
-            "/clear — очистить диалог\n"
-            "/myprompt — свои инструкции для ИИ\n"
-            "/myid — твой Telegram ID"
-        ),
-        "invite": (
-            "🎁 <b>Пригласи друзей — получи больше запросов</b>\n\n"
-            "Когда друг по твоей ссылке задаст боту первый вопрос, вы оба получите "
-            "<b>+{b}</b> запросов в сутки насовсем (бонус за {m} друзей).\n\n"
-            "🔗 Твоя ссылка:\n<code>{link}</code>\n\n"
-            "👥 Перешли по ссылке: <b>{n}</b>, из них уже пользуются: <b>{paid}</b>\n"
-            "🎁 Твой бонус: <b>+{bonus}</b> запросов в сутки"
-        ),
+        "help": "❓ <b>Справка</b>\n\nПиши вопрос обычным текстом или присылай фото.",
+        "invite": "🎁 <b>Пригласи друзей — получи больше запросов</b>\n\n🔗 Твоя ссылка:\n<code>{link}</code>",
         "invite_unavailable": "Не получилось сформировать ссылку, попробуй чуть позже.",
         "btn_share": "📤 Поделиться ботом",
-        "share_text": "ИИ-помощник в Telegram: отвечает на вопросы, пишет код, переводит, разбирает фото и помнит разговор 🤖",
-        "ref_welcome": "🎉 Добро пожаловать! Ты пришёл по приглашению — тебе добавлено <b>+{b}</b> запросов в сутки.",
-        "ref_notify": "🎁 Твой друг начал пользоваться ботом! Тебе добавлено <b>+{b}</b> запросов в сутки. Подробнее: /invite",
+        "share_text": "ИИ-помощник в Telegram: отвечает на вопросы, пишет код, переводит и разбирает фото 🤖",
+        "ref_welcome": "🎉 Добро пожаловать! Тебе добавлено <b>+{b}</b> запросов в сутки.",
+        "ref_notify": "🎁 Твой друг начал пользоваться ботом! Тебе добавлено <b>+{b}</b> запросов в сутки.",
         "ask": "💬 Задавай любой вопрос или пришли фото — можно сразу несколько. Я готов!",
-        # --- режимы ---
-        "mode_choose": (
-            "🎭 <b>Выбери режим</b>\n\n{list}\n\n"
-            "При смене режима диалог сбрасывается, а сохранённые сообщения остаются."
-        ),
-        "mode_set": (
-            "✅ <b>Режим: {mode}</b>\n{desc}\n\n"
-            "🧹 Прошлый диалог сброшен — он не повлияет на новый режим.{pinned}\n\n"
-            "Можно писать!"
-        ),
+        "mode_choose": "🎭 <b>Выбери режим</b>\n\n{list}",
+        "mode_set": "✅ <b>Режим: {mode}</b>\n{desc}\n\n🧹 Прошлый диалог сброшен.{pinned}",
         "mode_pinned": "\n📌 Сохранённые сообщения ({n}) остались в памяти.",
         "mode_same": "Этот режим уже включён",
-        # --- инфо ---
-        "info": (
-            "ℹ <b>О боте</b>\n\n"
-            "🧠 <b>Модель:</b> {model}\n"
-            "🎭 <b>Режим:</b> {mode}\n"
-            "⚡ <b>Стиль ответа:</b> {think}\n"
-            "🌐 <b>Язык:</b> {language}\n"
-            "💾 <b>Память:</b> {used} из {n} сообщений (вопросы и ответы вместе, ≈{pairs} пар)\n"
-            "📌 <b>Сохранено:</b> {pinned}\n"
-            "🖼 <b>Фото:</b> до {k} за раз\n"
-            "⏱ <b>Лимиты:</b> {limits}\n"
-            "🎁 <b>Бонус за друзей:</b> +{bonus} запросов в сутки (/invite)\n"
-            "👤 <b>Создатель:</b> @ashoton"
-        ),
-        "limits_fmt": "{pm}/мин, {pd}/сутки (за 24 ч использовано: {u})",
+        "info": "ℹ <b>О боте</b>\n\n🧠 <b>Модель:</b> {model}\n🎭 <b>Режим:</b> {mode}",
+        "limits_fmt": "{pm}/мин, {pd}/сутки",
         "limits_admin": "без ограничений (админ)",
         "unlimited": "без лимита",
-        # --- очистка ---
-        "clear_confirm": (
-            "🧹 <b>Очистить диалог?</b>\n"
-            "В памяти {n} сообщений — они будут удалены, и ИИ забудет контекст разговора."
-        ),
-        "clear_confirm_pinned": (
-            "🧹 <b>Очистить диалог?</b>\n"
-            "В памяти {n} сообщений, и ещё 📌 сохранено: {p}.\n"
-            "Можно очистить всё или оставить только сохранённые."
-        ),
+        "clear_confirm": "🧹 <b>Очистить диалог?</b>",
+        "clear_confirm_pinned": "🧹 <b>Очистить диалог?</b> Сохраненные останутся.",
         "btn_clear_yes": "🧹 Да, очистить",
         "btn_clear_all": "🧹 Очистить всё",
         "btn_clear_keep": "📌 Оставить сохранённые",
         "btn_cancel": "✖ Отмена",
-        "cleared": "🧹 История диалога очищена! Начнём с чистого листа.",
-        "cleared_keep": "🧹 Диалог очищен. Сохранённые сообщения ({p}) остались в памяти.",
-        "clear_cancelled": "Отменено — диалог остался как был.",
-        "clear_empty": "Память уже пуста — очищать нечего.",
-        # --- очередь, стоп, ожидание ---
+        "cleared": "🧹 История диалога очищена!",
+        "cleared_keep": "🧹 Диалог очищен. Сохранённые сообщения остались.",
+        "clear_cancelled": "Отменено.",
+        "clear_empty": "Память уже пуста.",
         "busy": "⏳ Подожди, я ещё отвечаю на предыдущие запросы.",
-        "queued": "⏳ Предыдущий запрос ещё обрабатывается — отвечу следом.",
+        "queued": "⏳ Предыдущий запрос ещё обрабатывается.",
         "btn_stop": "⏹ Стоп",
         "stopped": "⏹ Остановлено.",
         "stopped_note": "⏹ Ответ остановлен.",
         "stop_none": "Сейчас нечего останавливать",
         "limit_min": "⏳ Слишком часто: не больше {n} запросов в минуту. Подожди {wait}.",
-        "limit_day": "📅 Дневной лимит ({n} запросов) исчерпан. Новый запрос будет доступен через {wait}.",
+        "limit_day": "📅 Дневной лимит исчерпан. Доступно через {wait}.",
         "wait_sec": "{n} сек.",
         "wait_min": "{n} мин.",
         "wait_hm": "{h} ч {m} мин.",
         "thinking": "🤔 Запрос обрабатывается...",
         "thinking_time": "🧠 Думаю… {s} с",
         "fallback_note": "⚠️ Основная модель не ответила, пробую резервную…",
-        "cut_note": "⚠️ Ответ оборвался (сбой связи или таймаут). Напиши «продолжи», чтобы получить остальное.",
-        "error": "⚠️ Произошла ошибка при обращении к ИИ: {e}",
-        "err_timeout": (
-            "⏳ Модель слишком долго отвечала и не уложилась в отведённое время. "
-            "Попробуй ещё раз или сформулируй запрос короче."
-        ),
-        "err_rate": "🚦 Сервис ИИ сейчас перегружен (слишком много запросов). Попробуй через минуту.",
-        "err_conn": "📡 Не удалось связаться с сервисом ИИ. Попробуй ещё раз чуть позже.",
-        "err_status": "⚠️ Сервис ИИ вернул ошибку (код {code}). Попробуй ещё раз.",
-        "empty": "Извините, не удалось сформировать ответ. Попробуйте ещё раз!",
-        # --- кнопки под ответом ---
+        "cut_note": "⚠️ Ответ оборвался. Напиши «продолжи».",
+        "error": "⚠️ Произошла ошибка: {e}",
+        "err_timeout": "⏳ Модель слишком долго отвечала.",
+        "err_rate": "🚦 Сервис ИИ перегружен. Попробуй через минуту.",
+        "err_conn": "📡 Не удалось связаться с сервисом.",
+        "err_status": "⚠️ Ошибка сервиса ({code}).",
+        "empty": "Извините, не удалось сформировать ответ.",
         "btn_regen": "🔄 Повторить",
         "btn_cont": "➡️ Продолжить",
         "nothing_retry": "Нечего повторять",
         "btn_save": "📌 Сохранить",
         "btn_saved": "✅ Сохранено",
-        "save_ok": "📌 Сохранено в память. Список — /saved",
+        "save_ok": "📌 Сохранено в память.",
         "save_dup": "Это сообщение уже сохранено",
-        "save_limit": "Можно хранить до {n} сообщений. Удали лишние через /saved",
-        "save_gone": "Это сообщение уже нельзя сохранить — диалог был очищен.",
-        "saved_title": (
-            "📌 <b>Сохранённые сообщения</b> ({n}/{max})\n"
-            "Они остаются в памяти ИИ, пока ты не очистишь историю.\n\n{items}"
-        ),
-        "saved_empty": (
-            "📌 Сохранённых сообщений пока нет.\n\n"
-            "Включи кнопку «Сохранить» в ⚙️ Настройках — она появится под ответами ИИ."
-        ),
+        "save_limit": "Лимит сохраненных сообщений исчерпан.",
+        "save_gone": "Сообщение недоступно.",
+        "saved_title": "📌 <b>Сохраненные сообщения</b>\n\n{items}",
+        "saved_empty": "📌 Сохраненных сообщений пока нет.",
         "btn_del_all": "🗑 Удалить все",
         "saved_deleted": "Удалено",
-        "pinned_hdr": "Сообщения, которые пользователь сохранил как важный контекст (учитывай их в ответах):",
-        # --- фото ---
-        "photo_gone": "Фото больше недоступно — отправь его заново.",
+        "pinned_hdr": "Важный контекст:",
+        "photo_gone": "Фото больше недоступно.",
         "photo_fail": "⚠️ Не удалось загрузить фото: {e}",
         "photo_caption": "Опиши, что на изображении.",
         "photo_caption_multi": "Опиши, что на этих изображениях.",
-        "album_limit": "📎 Взял первые {n} фото — это максимум за один раз.",
-        # --- голос ---
-        "voice_off": (
-            "🎤 Голосовые пока не поддерживаются: у используемой модели нет распознавания речи. "
-            "Отправь вопрос текстом или фото."
-        ),
-        "voice_fail": "⚠️ Не удалось распознать голосовое: {e}",
-        "voice_empty": "Не удалось разобрать речь, попробуй ещё раз.",
+        "album_limit": "📎 Максимум фото за раз.",
+        "voice_off": "🎤 Голосовые не поддерживаются.",
+        "voice_fail": "⚠️ Ошибка распознавания: {e}",
+        "voice_empty": "Не удалось разобрать речь.",
         "voice_ok": "🎤 Распознано: {text}",
-        # --- настройки ---
-        "settings": (
-            "⚙️ <b>Настройки</b>\n\n"
-            "🌐 <b>Язык</b> — интерфейс бота и ответы ИИ.\n"
-            "🔁 <b>Повторить / Продолжить</b> — кнопки под ответом.\n"
-            "📌 <b>Сохранить</b> — кнопка под ответом: закрепляет сообщение в памяти, пока ты не очистишь "
-            "историю (список — /saved).\n"
-            "🧠 <b>Стиль ответа</b> — ⚡ Быстро: отвечает сразу; 🧠 Вдумчиво: рассуждает дольше, точнее "
-            "в сложных задачах.\n"
-            "✏️ Свои инструкции для ИИ — /myprompt"
-        ),
+        "settings": "⚙️ <b>Настройки</b>",
         "btn_buttons": "🔁 Повторить/Продолжить: {state}",
         "btn_savebtn": "📌 Кнопка «Сохранить»: {state}",
         "btn_think": "🧠 Стиль ответа: {state}",
@@ -344,35 +223,21 @@ TEXTS = {
         "think_deep": "🧠 Вдумчиво",
         "on": "вкл ✅",
         "off": "выкл ❌",
-        "lang_changed": "✅ Язык: Русский",
-        # --- прочее ---
+        "lang_changed": "✅ Язык изменен.",
         "myid": "Твой Telegram ID: {id}",
         "denied": "⛔ Нет доступа.",
-        "admin_unset": (
-            "Админ не настроен. Задай переменную окружения ADMIN_IDS "
-            "со своим ID (твой ID: {id}) и перезапусти бота."
-        ),
-        "continue_text": (
-            "Продолжи свой предыдущий ответ с того места, где он оборвался. "
-            "Не повторяй уже написанное."
-        ),
-        "user_instr": "Дополнительные инструкции пользователя (следуй им):",
-        "myprompt_help": (
-            "📝 <b>Свои инструкции для ИИ</b>\n\n"
-            "Опиши, как ИИ должен отвечать именно тебе: стиль, длина, роль. "
-            "Работает в режиме «Обычный».\n\n"
-            "Задать: <code>/myprompt текст инструкций</code>\n"
-            "Сбросить: <code>/myprompt reset</code>\n\n"
-            "Сейчас: {current}"
-        ),
+        "admin_unset": "Админ не настроен.",
+        "continue_text": "Продолжи свой предыдущий ответ с того места, где он оборвался.",
+        "user_instr": "Инструкции пользователя:",
+        "myprompt_help": "📝 <b>Инструкции для ИИ</b>\n\nСейчас: {current}",
         "myprompt_saved": "✅ Инструкции сохранены.",
         "myprompt_reset": "♻️ Инструкции сброшены.",
         "none": "не задано",
-        "export_empty": "Нечего выгружать — диалог пуст.",
-        "export_caption": "📄 Диалог: {n} сообщений (бот хранит только последние {m}).",
+        "export_empty": "Диалог пуст.",
+        "export_caption": "📄 Диалог: {n} сообщений.",
         "export_you": "Ты",
         "export_ai": "ИИ",
-        "export_saved": "Сохранённые сообщения",
+        "export_saved": "Сохранённые",
     },
     "en": {
         "btn_ask": "🤖 Ask the AI",
@@ -382,316 +247,137 @@ TEXTS = {
         "btn_settings": "⚙️ Settings",
         "btn_invite": "🎁 Invite",
         "btn_help": "❓ Help",
-        "menu_updated": "✨ The menu now has “🎁 Invite” (bonus requests for friends) and “❓ Help” (all features and commands) buttons.",
-        "banned": "🚫 Access to the bot is restricted.",
-        "maintenance": "🔧 The bot is under maintenance. Please come back a bit later.",
-        "start": (
-            "👋 <b>Hi, {name}!</b>\n\n"
-            "I'm an AI assistant powered by <b>{model}</b>. I answer questions, write and edit texts, "
-            "help with code, translate and look at images.\n\n"
-            "✨ <b>What I can do</b>\n"
-            "• 💬 Remember our conversation — the last {n} messages (questions and answers together)\n"
-            "• 🎭 Switch roles: translator, programmer, editor — the “Mode” button\n"
-            "• 🖼 Look at photos and albums — up to {k} images at once\n"
-            "• 📌 Keep what matters: turn on “Save” in settings — the message stays in memory "
-            "until you clear the chat\n"
-            "• ⏹ You can stop an answer with the “Stop” button\n"
-            "• 📄 Export the chat as a file — /export\n"
-            "• 🎁 Invite friends and get bonus requests — the “Invite” button\n\n"
-            "🚀 <b>Getting started</b>\n"
-            "Type a question or send a photo. The menu below has modes, settings, chat clearing, "
-            "friend invites and “Help” with all commands."
-        ),
-        "help": (
-            "❓ <b>Help</b>\n\n"
-            "<b>How to use</b>\n"
-            "Type a question as plain text or send photos — several at once (up to {k}), with a caption "
-            "or without. The answer appears as it is written and can be stopped with the “⏹ Stop” button. "
-            "If you send several messages in a row, I'll answer them one by one.\n\n"
-            "<b>Memory</b>\n"
-            "I remember the last {n} messages — both your questions and my answers. A photo stays in "
-            "memory only as a marker, the image itself isn't stored. You can pin something important with "
-            "the “📌 Save” button (turn it on in settings): saved messages stay until you clear the chat. "
-            "Switching the mode resets the chat, saved messages are kept.\n\n"
-            "<b>Menu buttons</b>\n"
-            "🤖 Ask AI · 🎭 Mode · 📝 Clear chat (with confirmation) · ℹ Info · "
-            "⚙️ Settings · 🎁 Invite · ❓ Help\n\n"
-            "<b>Commands</b>\n"
-            "/mode — choose a mode (the AI's role)\n"
-            "/settings — language, buttons under answers, “Save” button, answer style\n"
-            "/saved — saved messages\n"
-            "/export — download the chat as a file\n"
-            "/invite — invite friends and get a limit bonus\n"
-            "/clear — clear the chat\n"
-            "/myprompt — your own instructions for the AI\n"
-            "/myid — your Telegram ID"
-        ),
-        "invite": (
-            "🎁 <b>Invite friends — get more requests</b>\n\n"
-            "When a friend opens the bot with your link and asks their first question, you both get "
-            "<b>+{b}</b> requests per day for good (bonus for up to {m} friends).\n\n"
-            "🔗 Your link:\n<code>{link}</code>\n\n"
-            "👥 Opened the link: <b>{n}</b>, already using the bot: <b>{paid}</b>\n"
-            "🎁 Your bonus: <b>+{bonus}</b> requests per day"
-        ),
-        "invite_unavailable": "Couldn't build the link, please try again in a moment.",
-        "btn_share": "📤 Share the bot",
-        "share_text": "An AI assistant in Telegram: answers questions, writes code, translates, analyzes photos and remembers the chat 🤖",
-        "ref_welcome": "🎉 Welcome! You joined by invitation — <b>+{b}</b> requests per day were added for you.",
-        "ref_notify": "🎁 Your friend started using the bot! <b>+{b}</b> requests per day were added for you. Details: /invite",
-        "ask": "💬 Ask me anything or send a photo — several at once is fine. I'm ready!",
-        "mode_choose": (
-            "🎭 <b>Choose a mode</b>\n\n{list}\n\n"
-            "Switching the mode resets the chat; saved messages are kept."
-        ),
-        "mode_set": (
-            "✅ <b>Mode: {mode}</b>\n{desc}\n\n"
-            "🧹 The previous chat was reset — it won't affect the new mode.{pinned}\n\n"
-            "You can start writing!"
-        ),
-        "mode_pinned": "\n📌 Saved messages ({n}) are still in memory.",
-        "mode_same": "This mode is already on",
-        "info": (
-            "ℹ <b>About the bot</b>\n\n"
-            "🧠 <b>Model:</b> {model}\n"
-            "🎭 <b>Mode:</b> {mode}\n"
-            "⚡ <b>Answer style:</b> {think}\n"
-            "🌐 <b>Language:</b> {language}\n"
-            "💾 <b>Memory:</b> {used} of {n} messages (questions and answers together, ≈{pairs} pairs)\n"
-            "📌 <b>Saved:</b> {pinned}\n"
-            "🖼 <b>Photos:</b> up to {k} at once\n"
-            "⏱ <b>Limits:</b> {limits}\n"
-            "🎁 <b>Friend bonus:</b> +{bonus} requests per day (/invite)\n"
-            "👤 <b>Creator:</b> @ashoton"
-        ),
-        "limits_fmt": "{pm}/min, {pd}/day ({u} used in the last 24 h)",
-        "limits_admin": "no limits (admin)",
+        "menu_updated": "✨ Menu updated.",
+        "banned": "🚫 Access denied.",
+        "maintenance": "🔧 Maintenance mode.",
+        "start": "👋 <b>Hi, {name}!</b>",
+        "help": "❓ <b>Help</b>",
+        "invite": "🎁 <b>Invite</b>",
+        "invite_unavailable": "Unavailable.",
+        "btn_share": "📤 Share",
+        "share_text": "AI Assistant",
+        "ref_welcome": "Welcome!",
+        "ref_notify": "Friend joined!",
+        "ask": "💬 Ask me anything!",
+        "mode_choose": "🎭 <b>Choose mode</b>",
+        "mode_set": "✅ <b>Mode: {mode}</b>",
+        "mode_pinned": "",
+        "mode_same": "Already enabled",
+        "info": "ℹ <b>About</b>",
+        "limits_fmt": "{pm}/min",
+        "limits_admin": "unlimited",
         "unlimited": "unlimited",
-        "clear_confirm": (
-            "🧹 <b>Clear the chat?</b>\n"
-            "{n} messages are in memory — they will be deleted and the AI will forget the conversation."
-        ),
-        "clear_confirm_pinned": (
-            "🧹 <b>Clear the chat?</b>\n"
-            "{n} messages are in memory, plus 📌 saved: {p}.\n"
-            "You can clear everything or keep only the saved ones."
-        ),
-        "btn_clear_yes": "🧹 Yes, clear",
-        "btn_clear_all": "🧹 Clear everything",
-        "btn_clear_keep": "📌 Keep saved",
-        "btn_cancel": "✖ Cancel",
-        "cleared": "🧹 Chat history cleared! Let's start fresh.",
-        "cleared_keep": "🧹 Chat cleared. Saved messages ({p}) are still in memory.",
-        "clear_cancelled": "Cancelled — the chat is unchanged.",
-        "clear_empty": "Memory is already empty — nothing to clear.",
-        "busy": "⏳ Please wait, I'm still answering your previous requests.",
-        "queued": "⏳ Your previous request is still being processed — I'll answer right after.",
-        "btn_stop": "⏹ Stop",
-        "stopped": "⏹ Stopped.",
-        "stopped_note": "⏹ Answer stopped.",
-        "stop_none": "Nothing to stop right now",
-        "limit_min": "⏳ Too fast: no more than {n} requests per minute. Please wait {wait}.",
-        "limit_day": "📅 Daily limit ({n} requests) reached. You can send a new request in {wait}.",
-        "wait_sec": "{n} sec.",
-        "wait_min": "{n} min.",
-        "wait_hm": "{h} h {m} min.",
-        "thinking": "🤔 Thinking...",
-        "thinking_time": "🧠 Thinking… {s} s",
-        "fallback_note": "⚠️ The main model didn't respond, trying the backup one…",
-        "cut_note": "⚠️ The answer was cut off (connection problem or timeout). Type “continue” to get the rest.",
-        "error": "⚠️ An error occurred while contacting the AI: {e}",
-        "err_timeout": (
-            "⏳ The model took too long to answer and ran out of time. "
-            "Please try again or make your request shorter."
-        ),
-        "err_rate": "🚦 The AI service is overloaded right now (too many requests). Please try again in a minute.",
-        "err_conn": "📡 Couldn't reach the AI service. Please try again a bit later.",
-        "err_status": "⚠️ The AI service returned an error (code {code}). Please try again.",
-        "empty": "Sorry, I couldn't generate an answer. Please try again!",
-        "btn_regen": "🔄 Regenerate",
-        "btn_cont": "➡️ Continue",
+        "clear_confirm": "Clear?",
+        "clear_confirm_pinned": "Clear?",
+        "btn_clear_yes": "Yes",
+        "btn_clear_all": "All",
+        "btn_clear_keep": "Keep",
+        "btn_cancel": "Cancel",
+        "cleared": "Cleared.",
+        "cleared_keep": "Cleared.",
+        "clear_cancelled": "Cancelled.",
+        "clear_empty": "Empty.",
+        "busy": "Busy.",
+        "queued": "Queued.",
+        "btn_stop": "Stop",
+        "stopped": "Stopped.",
+        "stopped_note": "Stopped.",
+        "stop_none": "None",
+        "limit_min": "Limit reached.",
+        "limit_day": "Limit reached.",
+        "wait_sec": "{n}s",
+        "wait_min": "{n}m",
+        "wait_hm": "{h}h {m}m",
+        "thinking": "Thinking...",
+        "thinking_time": "Thinking… {s}s",
+        "fallback_note": "Fallback...",
+        "cut_note": "Cut off.",
+        "error": "Error: {e}",
+        "err_timeout": "Timeout.",
+        "err_rate": "Rate limit.",
+        "err_conn": "Connection error.",
+        "err_status": "Status error.",
+        "empty": "Empty response.",
+        "btn_regen": "Regenerate",
+        "btn_cont": "Continue",
         "nothing_retry": "Nothing to repeat",
-        "btn_save": "📌 Save",
-        "btn_saved": "✅ Saved",
-        "save_ok": "📌 Saved to memory. See the list: /saved",
-        "save_dup": "This message is already saved",
-        "save_limit": "You can keep up to {n} messages. Remove some via /saved",
-        "save_gone": "This message can no longer be saved — the chat was cleared.",
-        "saved_title": (
-            "📌 <b>Saved messages</b> ({n}/{max})\n"
-            "They stay in the AI's memory until you clear the history.\n\n{items}"
-        ),
-        "saved_empty": (
-            "📌 No saved messages yet.\n\n"
-            "Turn on the “Save” button in ⚙️ Settings — it will appear under the AI's answers."
-        ),
-        "btn_del_all": "🗑 Delete all",
+        "btn_save": "Save",
+        "btn_saved": "Saved",
+        "save_ok": "Saved.",
+        "save_dup": "Duplicate",
+        "save_limit": "Limit.",
+        "save_gone": "Gone.",
+        "saved_title": "Saved",
+        "saved_empty": "Empty",
+        "btn_del_all": "Delete all",
         "saved_deleted": "Deleted",
-        "pinned_hdr": "Messages the user saved as important context (take them into account in your answers):",
-        "photo_gone": "The photo is no longer available — please send it again.",
-        "photo_fail": "⚠️ Couldn't load the photo: {e}",
-        "photo_caption": "Describe what is in the image.",
-        "photo_caption_multi": "Describe what is in these images.",
-        "album_limit": "📎 I took the first {n} photos — that's the maximum at once.",
-        "voice_off": (
-            "🎤 Voice messages are not supported yet: the model has no speech recognition. "
-            "Please send your question as text or a photo."
-        ),
-        "voice_fail": "⚠️ Couldn't recognize the voice message: {e}",
-        "voice_empty": "Couldn't make out any speech, please try again.",
-        "voice_ok": "🎤 Recognized: {text}",
-        "settings": (
-            "⚙️ <b>Settings</b>\n\n"
-            "🌐 <b>Language</b> — bot interface and AI replies.\n"
-            "🔁 <b>Regenerate / Continue</b> — buttons under answers.\n"
-            "📌 <b>Save</b> — a button under answers that pins the message in memory until you clear "
-            "the history (list: /saved).\n"
-            "🧠 <b>Answer style</b> — ⚡ Fast: replies right away; 🧠 Thoughtful: reasons longer, better "
-            "on hard tasks.\n"
-            "✏️ Your own instructions for the AI — /myprompt"
-        ),
-        "btn_buttons": "🔁 Regenerate/Continue: {state}",
-        "btn_savebtn": "📌 “Save” button: {state}",
-        "btn_think": "🧠 Answer style: {state}",
-        "think_fast": "⚡ Fast",
-        "think_deep": "🧠 Thoughtful",
+        "pinned_hdr": "Context:",
+        "photo_gone": "Gone.",
+        "photo_fail": "Fail.",
+        "photo_caption": "Describe.",
+        "photo_caption_multi": "Describe.",
+        "album_limit": "Limit.",
+        "voice_off": "Off.",
+        "voice_fail": "Fail.",
+        "voice_empty": "Empty.",
+        "voice_ok": "OK: {text}",
+        "settings": "Settings",
+        "btn_buttons": "Buttons: {state}",
+        "btn_savebtn": "Save: {state}",
+        "btn_think": "Style: {state}",
+        "think_fast": "Fast",
+        "think_deep": "Deep",
         "on": "on ✅",
         "off": "off ❌",
-        "lang_changed": "✅ Language: English",
-        "myid": "Your Telegram ID: {id}",
-        "denied": "⛔ Access denied.",
-        "admin_unset": (
-            "Admin is not configured. Set the ADMIN_IDS environment variable "
-            "to your ID (your ID: {id}) and restart the bot."
-        ),
-        "continue_text": (
-            "Continue your previous answer from where it was cut off. "
-            "Do not repeat what has already been written."
-        ),
-        "user_instr": "Additional instructions from the user (follow them):",
-        "myprompt_help": (
-            "📝 <b>Your own instructions for the AI</b>\n\n"
-            "Describe how the AI should answer you: style, length, role. "
-            "Works in the “Default” mode.\n\n"
-            "Set: <code>/myprompt your instructions</code>\n"
-            "Reset: <code>/myprompt reset</code>\n\n"
-            "Current: {current}"
-        ),
-        "myprompt_saved": "✅ Instructions saved.",
-        "myprompt_reset": "♻️ Instructions reset.",
-        "none": "not set",
-        "export_empty": "Nothing to export — the chat is empty.",
-        "export_caption": "📄 Chat: {n} messages (the bot keeps only the last {m}).",
+        "lang_changed": "Language changed.",
+        "myid": "ID: {id}",
+        "denied": "Denied.",
+        "admin_unset": "Unset.",
+        "continue_text": "Continue.",
+        "user_instr": "Instructions:",
+        "myprompt_help": "Prompt: {current}",
+        "myprompt_saved": "Saved.",
+        "myprompt_reset": "Reset.",
+        "none": "none",
+        "export_empty": "Empty.",
+        "export_caption": "Export.",
         "export_you": "You",
         "export_ai": "AI",
-        "export_saved": "Saved messages",
+        "export_saved": "Saved",
     },
 }
 
 DEFAULT_PROMPT = {
-    "ru": (
-        "Ты полезный и вежливый AI-ассистент. "
-        "Отвечай строго на русском языке, независимо от языка обращения."
-    ),
-    "en": (
-        "You are a helpful and polite AI assistant. "
-        "Always answer strictly in English, regardless of the language of the request."
-    ),
+    "ru": "Ты полезный и вежливый AI-ассистент.",
+    "en": "You are a helpful AI assistant.",
 }
 
-# Режимы / персонажи. prompt=None — берётся основной промпт (его можно менять в админке).
 MODES = {
     "default": {
         "title": {"ru": "🤖 Обычный", "en": "🤖 Default"},
-        "desc": {
-            "ru": "универсальный помощник для любых вопросов и разговора.",
-            "en": "an all-round assistant for any question or chat.",
-        },
+        "desc": {"ru": "универсальный помощник", "en": "assistant"},
         "prompt": None,
     },
     "translator": {
         "title": {"ru": "🌍 Переводчик", "en": "🌍 Translator"},
-        "desc": {
-            "ru": "пришли текст — переведу: русский → английский, остальные языки → русский.",
-            "en": "send a text and I'll translate it: English → Russian, any other language → English.",
-        },
-        "prompt": {
-            "ru": (
-                "Ты профессиональный переводчик. Если текст на русском — переводи его на английский, "
-                "во всех остальных случаях переводи на русский. Сохраняй смысл, тон и форматирование. "
-                "Выводи только перевод без пояснений, если не просят иное."
-            ),
-            "en": (
-                "You are a professional translator. If the text is in English, translate it into Russian; "
-                "in all other cases translate it into English. Preserve the meaning, tone and formatting. "
-                "Output only the translation without explanations unless asked otherwise."
-            ),
-        },
+        "desc": {"ru": "переводчик", "en": "translator"},
+        "prompt": {"ru": "Ты переводчик.", "en": "You are a translator."},
     },
     "programmer": {
         "title": {"ru": "💻 Программист", "en": "💻 Programmer"},
-        "desc": {
-            "ru": "пишет и объясняет код, ищет ошибки, оформляет решения в блоках кода.",
-            "en": "writes and explains code, finds bugs, puts solutions in code blocks.",
-        },
-        "prompt": {
-            "ru": (
-                "Ты опытный программист и наставник. Пиши чистый, рабочий код и оформляй его в блоках кода "
-                "с указанием языка. Кратко объясняй решение, указывай на возможные ошибки и крайние случаи. "
-                "Отвечай на русском языке."
-            ),
-            "en": (
-                "You are an experienced programmer and mentor. Write clean, working code and put it in code "
-                "blocks with the language specified. Briefly explain the solution and point out possible "
-                "errors and edge cases. Answer in English."
-            ),
-        },
+        "desc": {"ru": "программист", "en": "programmer"},
+        "prompt": {"ru": "Ты программист.", "en": "You are a programmer."},
     },
     "editor": {
         "title": {"ru": "✍️ Редактор", "en": "✍️ Editor"},
-        "desc": {
-            "ru": "исправляет орфографию, пунктуацию и стиль, затем коротко перечисляет правки.",
-            "en": "fixes spelling, punctuation and style, then briefly lists the changes.",
-        },
-        "prompt": {
-            "ru": (
-                "Ты внимательный редактор и корректор. Исправляй орфографию, пунктуацию и стиль присланного "
-                "текста, сохраняя авторский смысл и голос. Сначала дай исправленный текст, затем коротко "
-                "перечисли главные правки. Отвечай на русском языке."
-            ),
-            "en": (
-                "You are a careful editor and proofreader. Fix spelling, punctuation and style in the text "
-                "you receive while preserving the author's meaning and voice. First give the corrected text, "
-                "then briefly list the main changes. Answer in English."
-            ),
-        },
+        "desc": {"ru": "редактор", "en": "editor"},
+        "prompt": {"ru": "Ты редактор.", "en": "You are an editor."},
     },
 }
 
-# Меню команд Telegram (кнопка «/» рядом с полем ввода)
 COMMANDS = {
-    "ru": [
-        ("start", "Запустить бота"),
-        ("help", "Справка по командам"),
-        ("mode", "Выбрать режим"),
-        ("settings", "Настройки"),
-        ("saved", "Сохранённые сообщения"),
-        ("export", "Выгрузить диалог файлом"),
-        ("invite", "Пригласить друзей (бонус)"),
-        ("clear", "Очистить диалог"),
-        ("myprompt", "Свои инструкции для ИИ"),
-    ],
-    "en": [
-        ("start", "Start the bot"),
-        ("help", "Help and commands"),
-        ("mode", "Choose a mode"),
-        ("settings", "Settings"),
-        ("saved", "Saved messages"),
-        ("export", "Download the chat as a file"),
-        ("invite", "Invite friends (bonus)"),
-        ("clear", "Clear the chat"),
-        ("myprompt", "Your own AI instructions"),
-    ],
+    "ru": [("start", "Запустить"), ("help", "Справка"), ("mode", "Режим"), ("settings", "Настройки"), ("saved", "Сохраненные"), ("export", "Экспорт"), ("invite", "Пригласить"), ("clear", "Очистить"), ("myprompt", "Инструкции")],
+    "en": [("start", "Start"), ("help", "Help"), ("mode", "Mode"), ("settings", "Settings"), ("saved", "Saved"), ("export", "Export"), ("invite", "Invite"), ("clear", "Clear"), ("myprompt", "Prompt")],
 }
 
 
@@ -701,18 +387,16 @@ def t(lang: str, key: str, **kw) -> str:
 
 
 def all_langs(key: str) -> set:
-    """Все варианты текста кнопки на всех языках (для фильтров хендлеров)."""
     return {TEXTS[code][key] for code in TEXTS}
 
 
 def modes_list(lang: str, current: str) -> str:
-    """Список режимов с описаниями для сообщения «Выбери режим»."""
     lines = []
     for key, m in MODES.items():
         mark = "👉" if key == current else "•"
         lines.append(f"{mark} <b>{m['title'][lang]}</b> — {m['desc'][lang]}")
     return "\n".join(lines)
-# [i18n-end]
+
 
 BTN_ASK = all_langs("btn_ask")
 BTN_MODE = all_langs("btn_mode")
@@ -721,61 +405,48 @@ BTN_INFO = all_langs("btn_info")
 BTN_SETTINGS = all_langs("btn_settings")
 BTN_INVITE = all_langs("btn_invite")
 BTN_HELP = all_langs("btn_help")
-MENU_VERSION = 3   # номер версии нижнего меню: при смене все пользователи один раз получают обновлённую клавиатуру
+MENU_VERSION = 3
 
 
 def make_timeout():
-    """Таймаут запросов к ИИ. «read» — максимальная пауза между кусками ответа: раньше было 60 с, и
-    «долго думающая» модель на сложном запросе падала с ошибкой, ничего не успев написать.
-    Библиотеку для HTTP здесь напрямую не импортируем: берём класс из самого openai."""
     timeout_cls = getattr(openai, "Timeout", None)
     if timeout_cls is not None:
         try:
             return timeout_cls(connect=15.0, read=AI_TIMEOUT, write=30.0, pool=30.0)
         except Exception:
             pass
-    return AI_TIMEOUT  # обычное число секунд работает везде
+    return AI_TIMEOUT
 
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
-client = AsyncOpenAI(
-    api_key=AI_API_KEY,
-    base_url=AI_BASE_URL,
-    timeout=make_timeout(),
-    max_retries=1,
-)
+client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL, timeout=make_timeout(), max_retries=1)
 
 admin_router = Router()
 user_router = Router()
 
 user_locks: dict[int, asyncio.Lock] = {}
-waiting: dict[int, int] = {}                   # user_id -> сколько запросов ждут своей очереди
-active_gens: dict = {}                         # user_id -> Gen текущей генерации (для кнопки «Стоп»)
-last_kb_msg: dict[int, tuple[int, int]] = {}   # user_id -> (chat_id, message_id) с кнопками «Повторить/Продолжить»
-last_images: dict[int, list] = {}              # user_id -> data URL фото последнего вопроса (для «Повторить»)
-albums: dict[str, dict] = {}                   # media_group_id -> собираемый альбом фото
+waiting: dict[int, int] = {}
+active_gens: dict = {}
+last_kb_msg: dict[int, tuple[int, int]] = {}
+last_images: dict[int, list] = {}
+albums: dict[str, dict] = {}
 bg_tasks: set = set()
-reasoning_bad: set[str] = set()                # модели, отвергшие параметр reasoning_effort
+reasoning_bad: set[str] = set()
 STATE = {"maintenance": False, "speedtest": False}
 db: aiosqlite.Connection
 
 
 def spawn(coro) -> asyncio.Task:
-    """Запускает фоновую задачу и держит на неё ссылку, чтобы её не убрал сборщик мусора."""
     task = asyncio.create_task(coro)
     bg_tasks.add(task)
     task.add_done_callback(bg_tasks.discard)
     return task
 
 
-# ----------------- MARKDOWN -> TELEGRAM HTML -----------------
-# [md-start]
 def md_to_html(text: str) -> str:
-    """Конвертирует Markdown от нейросети в HTML, который понимает Telegram."""
     if text.count("```") % 2:
-        text += "\n```"  # незакрытый блок кода (например, во время стриминга)
-
+        text += "\n```"
     stash: list[str] = []
 
     def keep(s: str) -> str:
@@ -790,9 +461,7 @@ def md_to_html(text: str) -> str:
 
     text = re.sub(r"```([\w+#.-]*)[ \t]*\n?(.*?)```", code_block, text, flags=re.S)
     text = re.sub(r"`([^`\n]+)`", lambda m: keep(f"<code>{html.escape(m.group(1), quote=False)}</code>"), text)
-
     text = html.escape(text, quote=False)
-
     text = re.sub(r"^[ ]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", r"<b>\1</b>", text, flags=re.M)
     text = re.sub(r"^([ \t]*)[-*+][ \t]+", r"\1• ", text, flags=re.M)
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text, flags=re.S)
@@ -801,13 +470,11 @@ def md_to_html(text: str) -> str:
     text = re.sub(r"(?<![\w_])_(?![\s_])([^_\n]+?)(?<![\s_])_(?![\w_])", r"<i>\1</i>", text)
     text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
     text = re.sub(r"\[([^\]\n]+)\]\((https?://[^\s)\"]+)\)", r'<a href="\2">\1</a>', text)
-
     text = re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], text)
     return text.strip()
 
 
 def split_markdown(text: str, limit: int = CHUNK) -> list[str]:
-    """Режет длинный ответ на куски, не ломая блоки кода."""
     chunks = []
     while len(text) > limit:
         cut = text.rfind("\n", 0, limit)
@@ -820,35 +487,25 @@ def split_markdown(text: str, limit: int = CHUNK) -> list[str]:
         chunks.append(chunk)
     chunks.append(text)
     return chunks
-# [md-end]
 
 
 async def edit_md(chat_id: int, message_id: int, md: str, kb=None):
     try:
-        await bot.edit_message_text(
-            md_to_html(md), chat_id=chat_id, message_id=message_id,
-            parse_mode="HTML", reply_markup=kb,
-        )
+        await bot.edit_message_text(md_to_html(md), chat_id=chat_id, message_id=message_id, parse_mode="HTML", reply_markup=kb)
     except TelegramBadRequest as e:
         if "not modified" in str(e).lower():
             return
-        # HTML не принят — отправляем как обычный текст
-        await bot.edit_message_text(
-            md[:4096], chat_id=chat_id, message_id=message_id, reply_markup=kb
-        )
+        await bot.edit_message_text(md[:4096], chat_id=chat_id, message_id=message_id, reply_markup=kb)
 
 
 async def send_md(chat_id: int, md: str, kb=None) -> types.Message:
     try:
-        return await bot.send_message(
-            chat_id, md_to_html(md), parse_mode="HTML", reply_markup=kb
-        )
+        return await bot.send_message(chat_id, md_to_html(md), parse_mode="HTML", reply_markup=kb)
     except TelegramBadRequest:
         return await bot.send_message(chat_id, md[:4096], reply_markup=kb)
 
 
 async def with_retry(fn, *args, **kwargs):
-    """Повторяет вызов при flood-лимите Telegram."""
     for attempt in range(3):
         try:
             return await fn(*args, **kwargs)
@@ -864,8 +521,6 @@ def fmt_ts(ts, fmt: str = "%d.%m %H:%M") -> str:
     tz = timezone(timedelta(hours=TZ_HOURS))
     return datetime.fromtimestamp(ts, tz=tz).strftime(fmt)
 
-
-# ----------------- БАЗА ДАННЫХ -----------------
 
 async def init_db():
     global db
@@ -893,40 +548,20 @@ async def init_db():
             src TEXT,
             menu_ver INTEGER DEFAULT 0
         );
-        CREATE TABLE IF NOT EXISTS history(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            role TEXT,
-            content TEXT
-        );
+        CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, role TEXT, content TEXT);
         CREATE INDEX IF NOT EXISTS idx_history_user ON history(user_id);
-        CREATE TABLE IF NOT EXISTS pinned(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            content TEXT,
-            ts INTEGER
-        );
+        CREATE TABLE IF NOT EXISTS pinned(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, content TEXT, ts INTEGER);
         CREATE INDEX IF NOT EXISTS idx_pinned_user ON pinned(user_id);
-        CREATE TABLE IF NOT EXISTS answers(
-            user_id INTEGER,
-            message_id INTEGER,
-            content TEXT,
-            ts INTEGER,
-            PRIMARY KEY (user_id, message_id)
-        );
+        CREATE TABLE IF NOT EXISTS answers(user_id INTEGER, message_id INTEGER, content TEXT, ts INTEGER, PRIMARY KEY (user_id, message_id));
         CREATE TABLE IF NOT EXISTS ads_log(ts INTEGER, user_id INTEGER, ok INTEGER);
         CREATE INDEX IF NOT EXISTS idx_ads_ts ON ads_log(ts);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
-        CREATE TABLE IF NOT EXISTS errors(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts INTEGER, user_id INTEGER, text TEXT
-        );
+        CREATE TABLE IF NOT EXISTS errors(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, user_id INTEGER, text TEXT);
         CREATE TABLE IF NOT EXISTS requests(ts INTEGER, user_id INTEGER);
         CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts);
         CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id, ts);
         """
     )
-    # миграция для баз, созданных прошлыми версиями бота
     cur = await db.execute("PRAGMA table_info(users)")
     cols = {r["name"] for r in await cur.fetchall()}
     for name, ddl in (
@@ -945,977 +580,10 @@ async def init_db():
         if name not in cols:
             await db.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
             if name == "src":
-                # все, кто пришёл до появления учёта источников, — отдельная группа
                 await db.execute("UPDATE users SET src='old'")
     await db.commit()
     STATE["maintenance"] = (await get_setting("maintenance", "0")) == "1"
     logging.info(f"База данных: {DB_PATH}")
-
-
-async def scalar(query: str, args=()):
-    cur = await db.execute(query, args)
-    row = await cur.fetchone()
-    return row[0] if row else 0
-
-
-async def get_setting(key: str, default: str) -> str:
-    cur = await db.execute("SELECT value FROM settings WHERE key=?", (key,))
-    row = await cur.fetchone()
-    return row["value"] if row else default
-
-
-async def set_setting(key: str, value: str):
-    await db.execute(
-        "INSERT INTO settings(key, value) VALUES(?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (key, value),
-    )
-    await db.commit()
-
-
-async def del_setting(key: str):
-    await db.execute("DELETE FROM settings WHERE key=?", (key,))
-    await db.commit()
-
-
-async def touch_user(user: types.User):
-    now = int(time.time())
-    await db.execute(
-        "INSERT INTO users(id, username, first_name, joined, last_seen, menu_ver) VALUES(?,?,?,?,?,?) "
-        "ON CONFLICT(id) DO UPDATE SET username=excluded.username, "
-        "first_name=excluded.first_name, last_seen=excluded.last_seen",
-        (user.id, user.username, user.first_name, now, now, MENU_VERSION),
-    )
-    await db.commit()
-
-
-async def is_banned(user_id: int) -> bool:
-    return bool(await scalar("SELECT banned FROM users WHERE id=?", (user_id,)))
-
-
-class Prefs(NamedTuple):
-    lang: str        # язык интерфейса
-    buttons: bool    # кнопки «Повторить / Продолжить» под ответом
-    think: bool      # стиль «Вдумчиво»
-    save: bool       # кнопка «Сохранить» под ответом
-
-
-async def get_prefs(user_id: int) -> Prefs:
-    cur = await db.execute(
-        "SELECT lang, buttons, think, save_btn FROM users WHERE id=?", (user_id,)
-    )
-    row = await cur.fetchone()
-    if not row:
-        return Prefs("ru", False, False, False)
-    lang = row["lang"] if row["lang"] in LANGS else "ru"
-    return Prefs(lang, bool(row["buttons"]), bool(row["think"]), bool(row["save_btn"]))
-
-
-async def get_lang(user_id: int) -> str:
-    return (await get_prefs(user_id)).lang
-
-
-async def set_user_field(user_id: int, field: str, value):
-    if field not in ("mode", "lang", "buttons", "think", "custom_prompt", "save_btn"):
-        raise ValueError(field)
-    await db.execute(f"UPDATE users SET {field}=? WHERE id=?", (value, user_id))
-    await db.commit()
-
-
-async def get_mode(user_id: int) -> str:
-    mode = await scalar("SELECT mode FROM users WHERE id=?", (user_id,))
-    return mode if mode in MODES else "default"
-
-
-async def get_custom_prompt(user_id: int) -> str:
-    return (await scalar("SELECT custom_prompt FROM users WHERE id=?", (user_id,))) or ""
-
-
-async def get_system_prompt(mode: str, lang: str) -> str:
-    custom = MODES[mode]["prompt"]
-    if custom:
-        return custom[lang]
-    key = "system_prompt" if lang == "ru" else "system_prompt_en"
-    return await get_setting(key, DEFAULT_PROMPT[lang])
-
-
-async def build_system_prompt(user_id: int, mode: str, lang: str) -> str:
-    """Системный промпт режима + личные инструкции пользователя + его сохранённые сообщения."""
-    prompt = await get_system_prompt(mode, lang)
-    if mode == "default":
-        custom = await get_custom_prompt(user_id)
-        if custom:
-            prompt += "\n\n" + t(lang, "user_instr") + "\n" + custom
-    pins = await list_pinned(user_id)
-    if pins:
-        parts: list[str] = []
-        total = 0
-        for i, r in enumerate(pins, 1):
-            text = r["content"]
-            if total + len(text) > PINNED_TOTAL_CHARS:
-                text = text[: max(0, PINNED_TOTAL_CHARS - total)]
-                if not text:
-                    break
-            parts.append(f"[{i}] {text}")
-            total += len(text)
-        prompt += "\n\n" + t(lang, "pinned_hdr") + "\n" + "\n\n".join(parts)
-    return prompt
-
-
-# --- память диалога ---
-
-async def get_memory_len() -> int:
-    try:
-        n = int(await get_setting("memory_len", str(MEMORY_DEFAULT)))
-    except ValueError:
-        n = MEMORY_DEFAULT
-    return max(MEMORY_MIN, min(MEMORY_MAX, n))
-
-
-async def get_history_chars() -> int:
-    try:
-        n = int(await get_setting("history_chars", str(HISTORY_CHARS)))
-    except ValueError:
-        n = HISTORY_CHARS
-    return max(1000, n)
-
-
-async def apply_memory_len(n: int):
-    """Сохраняет новый размер памяти и сразу обрезает чужие истории, если память уменьшили."""
-    n = max(MEMORY_MIN, min(MEMORY_MAX, n))
-    await set_setting("memory_len", str(n))
-    try:
-        await db.execute(
-            "DELETE FROM history WHERE id IN ("
-            " SELECT id FROM ("
-            "  SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id DESC) AS rn FROM history"
-            " ) WHERE rn > ?)",
-            (n,),
-        )
-        await db.commit()
-    except Exception:
-        logging.exception("Не удалось сразу обрезать истории — это произойдёт при следующих сообщениях")
-
-
-async def load_history(user_id: int, limit: int | None = None) -> list:
-    if limit is None:
-        limit = await get_memory_len()
-    cur = await db.execute(
-        "SELECT role, content FROM ("
-        " SELECT id, role, content FROM history WHERE user_id=? ORDER BY id DESC LIMIT ?"
-        ") ORDER BY id",
-        (user_id, limit),
-    )
-    return [{"role": r["role"], "content": r["content"]} for r in await cur.fetchall()]
-
-
-def trim_by_chars(history: list, limit: int = HISTORY_CHARS) -> list:
-    """Оставляет самые свежие сообщения в пределах лимита символов — чем короче запрос, тем быстрее ответ."""
-    out: list = []
-    total = 0
-    for m in reversed(history):
-        total += len(m["content"])
-        if total > limit and len(out) >= 2:
-            break
-        out.append(m)
-    out.reverse()
-    while out and out[0]["role"] != "user":
-        out.pop(0)
-    return out
-
-
-async def count_history(user_id: int) -> int:
-    return await scalar("SELECT COUNT(*) FROM history WHERE user_id=?", (user_id,))
-
-
-async def pop_last_exchange(user_id: int):
-    await db.execute(
-        "DELETE FROM history WHERE id IN ("
-        " SELECT id FROM history WHERE user_id=? ORDER BY id DESC LIMIT 2)",
-        (user_id,),
-    )
-    await db.commit()
-
-
-async def save_exchange(user_id: int, question: str, answer: str):
-    """Запоминает И вопрос пользователя, И ответ ИИ (две записи), лишнее старое удаляет."""
-    await db.executemany(
-        "INSERT INTO history(user_id, role, content) VALUES(?,?,?)",
-        [(user_id, "user", question), (user_id, "assistant", answer)],
-    )
-    await db.execute(
-        "DELETE FROM history WHERE user_id=? AND id NOT IN ("
-        " SELECT id FROM history WHERE user_id=? ORDER BY id DESC LIMIT ?)",
-        (user_id, user_id, await get_memory_len()),
-    )
-    await db.execute("UPDATE users SET msgs = msgs + 1 WHERE id=?", (user_id,))
-    await db.commit()
-
-
-async def clear_history(user_id: int, *, pinned: bool = True, answers: bool = True):
-    """Очищает диалог. pinned=False оставляет сохранённые сообщения, answers=False — кэш для кнопки «Сохранить»."""
-    await db.execute("DELETE FROM history WHERE user_id=?", (user_id,))
-    if answers:
-        await db.execute("DELETE FROM answers WHERE user_id=?", (user_id,))
-    if pinned:
-        await db.execute("DELETE FROM pinned WHERE user_id=?", (user_id,))
-    await db.commit()
-    last_images.pop(user_id, None)
-
-
-# --- сохранённые сообщения ---
-
-def _norm(content: str) -> str:
-    return content.strip()[:PINNED_ITEM_CHARS]
-
-
-async def count_pinned(user_id: int) -> int:
-    return await scalar("SELECT COUNT(*) FROM pinned WHERE user_id=?", (user_id,))
-
-
-async def list_pinned(user_id: int) -> list:
-    cur = await db.execute("SELECT id, content FROM pinned WHERE user_id=? ORDER BY id", (user_id,))
-    return list(await cur.fetchall())
-
-
-async def is_pinned(user_id: int, content: str) -> bool:
-    return bool(
-        await scalar(
-            "SELECT COUNT(*) FROM pinned WHERE user_id=? AND content=?", (user_id, _norm(content))
-        )
-    )
-
-
-async def add_pinned(user_id: int, content: str) -> str:
-    """Возвращает 'ok', 'dup' (уже сохранено) или 'limit' (достигнут максимум)."""
-    content = _norm(content)
-    if await is_pinned(user_id, content):
-        return "dup"
-    if await count_pinned(user_id) >= PINNED_MAX:
-        return "limit"
-    await db.execute(
-        "INSERT INTO pinned(user_id, content, ts) VALUES(?,?,?)", (user_id, content, int(time.time()))
-    )
-    await db.commit()
-    return "ok"
-
-
-async def remember_answer(user_id: int, message_id: int, content: str):
-    """Запоминает полный текст ответа по id сообщения — нужно, чтобы кнопка «Сохранить» знала, что сохранять."""
-    await db.execute(
-        "INSERT OR REPLACE INTO answers(user_id, message_id, content, ts) VALUES(?,?,?,?)",
-        (user_id, message_id, content, int(time.time())),
-    )
-    await db.execute(
-        "DELETE FROM answers WHERE user_id=? AND message_id NOT IN ("
-        " SELECT message_id FROM answers WHERE user_id=? ORDER BY ts DESC, message_id DESC LIMIT ?)",
-        (user_id, user_id, ANSWERS_KEEP),
-    )
-    await db.commit()
-
-
-async def get_answer(user_id: int, message_id: int) -> str | None:
-    cur = await db.execute(
-        "SELECT content FROM answers WHERE user_id=? AND message_id=?", (user_id, message_id)
-    )
-    row = await cur.fetchone()
-    return row["content"] if row else None
-
-
-async def log_error(user_id: int, text: str):
-    await db.execute(
-        "INSERT INTO errors(ts, user_id, text) VALUES(?,?,?)",
-        (int(time.time()), user_id, text[:500]),
-    )
-    await db.execute(
-        "DELETE FROM errors WHERE id NOT IN (SELECT id FROM errors ORDER BY id DESC LIMIT 200)"
-    )
-    await db.commit()
-
-
-# ----------------- ЛИМИТЫ -----------------
-
-async def get_limits() -> tuple[int, int]:
-    per_min = int(await get_setting("rate_min", str(RATE_PER_MIN)))
-    per_day = int(await get_setting("rate_day", str(RATE_PER_DAY)))
-    return per_min, per_day
-
-
-async def get_bonus(user_id: int) -> int:
-    return int(await scalar("SELECT COALESCE(bonus, 0) FROM users WHERE id=?", (user_id,)) or 0)
-
-
-def fmt_limit(n: int, lang: str = "ru") -> str:
-    return str(n) if n > 0 else t(lang, "unlimited")
-
-
-def fmt_wait(sec: int, lang: str) -> str:
-    sec = max(sec, 1)
-    if sec < 60:
-        return t(lang, "wait_sec", n=sec)
-    if sec < 3600:
-        return t(lang, "wait_min", n=sec // 60 + 1)
-    return t(lang, "wait_hm", h=sec // 3600, m=sec % 3600 // 60)
-
-
-async def check_limit(user_id: int, lang: str) -> str | None:
-    """Возвращает текст отказа, если лимит исчерпан, иначе None. Админов не ограничиваем."""
-    if user_id in ADMIN_IDS:
-        return None
-    per_min, per_day = await get_limits()
-    if per_day > 0:
-        per_day += await get_bonus(user_id)
-    now = int(time.time())
-    if per_min > 0:
-        cnt = await scalar(
-            "SELECT COUNT(*) FROM requests WHERE user_id=? AND ts>?", (user_id, now - 60)
-        )
-        if cnt >= per_min:
-            oldest = await scalar(
-                "SELECT MIN(ts) FROM requests WHERE user_id=? AND ts>?", (user_id, now - 60)
-            )
-            return t(lang, "limit_min", n=per_min, wait=fmt_wait(oldest + 60 - now, lang))
-    if per_day > 0:
-        cnt = await scalar(
-            "SELECT COUNT(*) FROM requests WHERE user_id=? AND ts>?", (user_id, now - 86400)
-        )
-        if cnt >= per_day:
-            oldest = await scalar(
-                "SELECT MIN(ts) FROM requests WHERE user_id=? AND ts>?", (user_id, now - 86400)
-            )
-            return t(lang, "limit_day", n=per_day, wait=fmt_wait(oldest + 86400 - now, lang))
-    return None
-
-
-# ----------------- КЛАВИАТУРЫ -----------------
-
-def get_main_menu(lang: str):
-    builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text=t(lang, "btn_ask")))
-    builder.add(types.KeyboardButton(text=t(lang, "btn_mode")))
-    builder.add(types.KeyboardButton(text=t(lang, "btn_clear")))
-    builder.add(types.KeyboardButton(text=t(lang, "btn_info")))
-    builder.add(types.KeyboardButton(text=t(lang, "btn_settings")))
-    builder.add(types.KeyboardButton(text=t(lang, "btn_invite")))
-    builder.add(types.KeyboardButton(text=t(lang, "btn_help")))
-    builder.adjust(2, 2, 3)
-    return builder.as_markup(resize_keyboard=True)
-
-
-def answer_kb(lang: str, regen: bool, save_state: str | None):
-    """Кнопки под ответом: «Повторить/Продолжить» (regen) и «Сохранить» (save_state: 'save' / 'saved' / None)."""
-    if not regen and not save_state:
-        return None
-    b = InlineKeyboardBuilder()
-    sizes = []
-    if regen:
-        b.button(text=t(lang, "btn_regen"), callback_data="re:regen")
-        b.button(text=t(lang, "btn_cont"), callback_data="re:cont")
-        sizes.append(2)
-    if save_state:
-        b.button(
-            text=t(lang, "btn_saved" if save_state == "saved" else "btn_save"), callback_data="sv:add"
-        )
-        sizes.append(1)
-    b.adjust(*sizes)
-    return b.as_markup()
-
-
-async def build_answer_kb(user_id: int, message_id: int, lang: str, regen: bool, save_on: bool):
-    """Клавиатура уже отправленного ответа с учётом того, сохранён ли он."""
-    state = None
-    if save_on:
-        ans = await get_answer(user_id, message_id)
-        state = "saved" if ans is not None and await is_pinned(user_id, ans) else "save"
-    return answer_kb(lang, regen, state)
-
-
-def stop_kb(lang: str):
-    b = InlineKeyboardBuilder()
-    b.button(text=t(lang, "btn_stop"), callback_data="st:stop")
-    return b.as_markup()
-
-
-def modes_kb(current: str, lang: str):
-    b = InlineKeyboardBuilder()
-    for key, m in MODES.items():
-        b.button(text=("✅ " if key == current else "") + m["title"][lang], callback_data=f"mode:{key}")
-    b.adjust(1)
-    return b.as_markup()
-
-
-def settings_kb(lang: str, prefs: Prefs):
-    def state(v: bool) -> str:
-        return t(lang, "on" if v else "off")
-
-    b = InlineKeyboardBuilder()
-    for code, name in LANGS.items():
-        b.button(text=("✅ " if code == lang else "") + name, callback_data=f"set:lang:{code}")
-    b.button(text=t(lang, "btn_buttons", state=state(prefs.buttons)), callback_data="set:btns")
-    b.button(text=t(lang, "btn_savebtn", state=state(prefs.save)), callback_data="set:save")
-    b.button(
-        text=t(lang, "btn_think", state=t(lang, "think_deep" if prefs.think else "think_fast")),
-        callback_data="set:think",
-    )
-    b.adjust(2, 1, 1, 1)
-    return b.as_markup()
-
-
-def clear_kb(lang: str, has_pinned: bool):
-    b = InlineKeyboardBuilder()
-    if has_pinned:
-        b.button(text=t(lang, "btn_clear_all"), callback_data="cl:all")
-        b.button(text=t(lang, "btn_clear_keep"), callback_data="cl:keep")
-        b.button(text=t(lang, "btn_cancel"), callback_data="cl:no")
-        b.adjust(1)
-    else:
-        b.button(text=t(lang, "btn_clear_yes"), callback_data="cl:all")
-        b.button(text=t(lang, "btn_cancel"), callback_data="cl:no")
-        b.adjust(2)
-    return b.as_markup()
-
-
-# ----------------- MIDDLEWARE: регистрация, бан, техработы -----------------
-
-async def refresh_menu(event, user):
-    """Один раз присылает старым пользователям обновлённую клавиатуру (reply-клавиатуру нельзя обновить «на месте»)."""
-    if hasattr(event, "data") or not hasattr(event, "chat"):
-        return  # только для обычных сообщений, не для нажатий inline-кнопок
-    try:
-        ver = await scalar("SELECT COALESCE(menu_ver, 0) FROM users WHERE id=?", (user.id,))
-        if ver >= MENU_VERSION:
-            return
-        await db.execute("UPDATE users SET menu_ver=? WHERE id=?", (MENU_VERSION, user.id))
-        await db.commit()
-        if (getattr(event, "text", None) or "").startswith("/start"):
-            return  # /start и так присылает новое меню
-        lang = await get_lang(user.id)
-        await event.answer(t(lang, "menu_updated"), reply_markup=get_main_menu(lang))
-    except Exception:
-        logging.exception("Не удалось обновить меню (не критично)")
-
-
-class UserMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        user = getattr(event, "from_user", None)
-        if user and not user.is_bot:
-            await touch_user(user)
-            if user.id not in ADMIN_IDS:
-                if await is_banned(user.id):
-                    await event.answer(t(await get_lang(user.id), "banned"))
-                    return
-                if STATE["maintenance"]:
-                    await event.answer(t(await get_lang(user.id), "maintenance"))
-                    return
-            await refresh_menu(event, user)
-        return await handler(event, data)
-
-
-dp.message.outer_middleware(UserMiddleware())
-dp.callback_query.outer_middleware(UserMiddleware())
-
-
-# ================= ЯДРО: запрос к ИИ =================
-
-class Gen:
-    """Состояние одной генерации: накопленный текст и тайминги."""
-
-    def __init__(self):
-        self.text = ""
-        self.started = time.time()
-        self.first_any_at = None      # первый кусок данных (в т.ч. «рассуждение»)
-        self.first_token_at = None    # первый кусок видимого ответа
-        self.thinking = False         # модель присылала рассуждение
-        self.dropped_effort = False   # провайдер не принял reasoning_effort
-        self.note = ""                # пометка для заглушки (например, переключение на резервную модель)
-        self.stopped = False          # пользователь нажал «Стоп»
-        self.task = None              # asyncio-задача генерации (её отменяет «Стоп»)
-
-
-async def generate(model: str, messages: list, effort, gen: Gen, remember: bool = True):
-    """Стримит ответ модели в gen.text. Бросает исключение при сбое (gen.text при этом сохраняется)."""
-    eff = effort if effort and effort != "default" else None
-    if eff and remember and model in reasoning_bad:
-        eff = None  # раньше этот провайдер/модель уже отвергли параметр
-    dropped = False
-
-    while True:
-        kwargs = dict(model=model, messages=messages, temperature=0.7, stream=True)
-        if MAX_TOKENS > 0:
-            kwargs["max_tokens"] = MAX_TOKENS
-        if eff:
-            kwargs["extra_body"] = {"reasoning_effort": eff}
-
-        stream = None
-        try:
-            stream = await client.chat.completions.create(**kwargs)
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta is None:
-                    continue
-                now = time.time()
-                if gen.first_any_at is None:
-                    gen.first_any_at = now
-                if delta.content:
-                    if gen.first_token_at is None:
-                        gen.first_token_at = now
-                    gen.text += delta.content
-                elif getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None):
-                    gen.thinking = True
-            break
-        except (openai.BadRequestError, openai.UnprocessableEntityError):
-            if eff and not gen.text:
-                logging.warning("Провайдер отверг reasoning_effort=%s для %s, повторяю без него", eff, model)
-                eff = None
-                dropped = True
-                gen.dropped_effort = True
-                continue
-            raise
-        finally:
-            if stream is not None:
-                try:
-                    await stream.close()
-                except Exception:
-                    pass
-
-    if dropped and remember:
-        reasoning_bad.add(model)
-
-
-def friendly_error(lang: str, e: BaseException) -> str:
-    if isinstance(e, (asyncio.TimeoutError, openai.APITimeoutError)):
-        return t(lang, "err_timeout")
-    if isinstance(e, openai.RateLimitError):
-        return t(lang, "err_rate")
-    if isinstance(e, openai.APIConnectionError):
-        return t(lang, "err_conn")
-    if isinstance(e, openai.APIStatusError):
-        return t(lang, "err_status", code=e.status_code)
-    return t(lang, "error", e=e)
-
-
-def waiting_text(lang: str, gen: Gen) -> str:
-    txt = t(lang, "thinking_time", s=int(time.time() - gen.started))
-    return f"{gen.note}\n{txt}" if gen.note else txt
-
-
-async def drop_stop_kb(chat_id: int, message_id: int, kb=None):
-    """Страховка: после ответа гарантированно убираем кнопку «Стоп» (или ставим нужные кнопки ответа).
-    Нужна на случай, если последняя правка из «тикера» долетела до Telegram позже финальной."""
-    try:
-        await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=kb)
-    except Exception:
-        pass  # «message is not modified» — кнопки уже такие, как надо
-
-
-async def run_ai(
-    chat_id: int,
-    user_id: int,
-    question: str,
-    images: list | None = None,
-    regen: bool = False,
-):
-    """Отправляет вопрос (с фото или без) модели. Запросы одного человека идут по очереди."""
-    lang = (await get_prefs(user_id)).lang
-    lock = user_locks.setdefault(user_id, asyncio.Lock())
-
-    note = None
-    if lock.locked():
-        if waiting.get(user_id, 0) >= MAX_QUEUE:
-            await bot.send_message(chat_id, t(lang, "busy"))
-            return
-        waiting[user_id] = waiting.get(user_id, 0) + 1
-        try:
-            try:
-                note = await bot.send_message(chat_id, t(lang, "queued"))
-            except Exception:
-                note = None
-            await lock.acquire()
-        finally:
-            waiting[user_id] -= 1
-    else:
-        await lock.acquire()
-
-    try:
-        if note is not None:
-            try:
-                await bot.delete_message(chat_id, note.message_id)
-            except Exception:
-                pass
-        await _run_locked(chat_id, user_id, question, images, regen)
-    finally:
-        lock.release()
-
-
-async def _run_locked(chat_id: int, user_id: int, question: str, images: list | None, regen: bool):
-    prefs = await get_prefs(user_id)
-    lang = prefs.lang
-
-    denied = await check_limit(user_id, lang)
-    if denied:
-        await bot.send_message(chat_id, denied)
-        return
-
-    # под прошлым ответом убираем «Повторить/Продолжить» (кнопка «Сохранить» остаётся)
-    old = last_kb_msg.pop(user_id, None)
-    if old:
-        try:
-            kb = await build_answer_kb(user_id, old[1], lang, regen=False, save_on=prefs.save)
-            await bot.edit_message_reply_markup(chat_id=old[0], message_id=old[1], reply_markup=kb)
-        except Exception:
-            pass
-
-    # заглушка сразу (с кнопкой «Стоп»), всё остальное — потом
-    stop_markup = stop_kb(lang)
-    sent = await bot.send_message(chat_id, t(lang, "thinking"), reply_markup=stop_markup)
-
-    # считаем попытку сразу, чтобы лимит нельзя было обойти ошибками
-    await db.execute("INSERT INTO requests(ts, user_id) VALUES(?,?)", (int(time.time()), user_id))
-    await db.commit()
-
-    mode = await get_mode(user_id)
-    prompt = await build_system_prompt(user_id, mode, lang)
-    model = VISION_MODEL if images else await get_setting("model", MODEL)
-    effort = await get_setting(
-        "effort_think" if prefs.think else "effort_fast",
-        EFFORT_THINK if prefs.think else EFFORT_FAST,
-    )
-    fallback = await get_setting("fallback_model", FALLBACK_MODEL)
-
-    memory = await get_memory_len()
-    history = await load_history(user_id, memory + (2 if regen else 0))
-    if regen:
-        history = history[:-2]
-    history = trim_by_chars(history, await get_history_chars())
-
-    if images:
-        user_content = [{"type": "text", "text": question}] + [
-            {"type": "image_url", "image_url": {"url": u}} for u in images
-        ]
-        stored_question = f"{photo_tag(len(images))} {question}"
-    else:
-        user_content = question
-        stored_question = question
-
-    messages = [{"role": "system", "content": prompt}] + history + [
-        {"role": "user", "content": user_content}
-    ]
-
-    gen = Gen()
-
-    async def ticker():
-        """Обновляет сообщение в Telegram независимо от чтения потока: не тормозит приём ответа."""
-        last_shown = ""
-        last_typing = 0.0
-        last_wait_edit = 0.0
-        try:
-            while True:
-                await asyncio.sleep(EDIT_INTERVAL)
-                now = time.time()
-                if now - last_typing > 4:
-                    last_typing = now
-                    try:
-                        await bot.send_chat_action(chat_id, "typing")
-                    except Exception:
-                        pass
-                if gen.text.strip():
-                    shown = split_markdown(gen.text.strip())[0]
-                    if shown != last_shown:
-                        try:
-                            await edit_md(chat_id, sent.message_id, shown, stop_markup)
-                            last_shown = shown
-                        except TelegramRetryAfter as e:
-                            await asyncio.sleep(e.retry_after)
-                        except Exception:
-                            pass
-                elif now - gen.started >= 4 and now - last_wait_edit >= 3:
-                    last_wait_edit = now
-                    try:
-                        await bot.edit_message_text(
-                            waiting_text(lang, gen),
-                            chat_id=chat_id,
-                            message_id=sent.message_id,
-                            reply_markup=stop_markup,
-                        )
-                    except TelegramRetryAfter as e:
-                        await asyncio.sleep(e.retry_after)
-                    except Exception:
-                        pass
-        except asyncio.CancelledError:
-            return
-
-    # --- генерация: основная модель, при сбое без единого символа — резервная ---
-    attempts = [(model, effort)]
-    if fallback and fallback != "off" and fallback != model and not images:
-        attempts.append((fallback, None))
-
-    holder = {"err": None}
-
-    async def produce():
-        for i, (m, eff) in enumerate(attempts):
-            try:
-                await asyncio.wait_for(generate(m, messages, eff, gen), TOTAL_TIMEOUT)
-                holder["err"] = None
-                return
-            except Exception as e:
-                holder["err"] = e
-                logging.warning("Сбой модели %s: %s: %s", m, type(e).__name__, e)
-                await log_error(user_id, f"{m}: {type(e).__name__}: {e}")
-                if gen.text or i == len(attempts) - 1:
-                    return
-                gen.note = t(lang, "fallback_note")
-                gen.started = time.time()
-
-    work = asyncio.create_task(produce())
-    gen.task = work
-    active_gens[user_id] = gen
-    ticker_task = asyncio.create_task(ticker())
-    try:
-        await asyncio.wait({work})
-    finally:
-        active_gens.pop(user_id, None)
-        if not work.done():
-            work.cancel()
-        ticker_task.cancel()
-        try:
-            await ticker_task
-        except asyncio.CancelledError:
-            pass
-
-    err = holder["err"]
-    if not work.cancelled() and work.exception() is not None:
-        err = work.exception()
-    if gen.stopped:
-        err = None  # остановил сам пользователь — это не сбой
-
-    final = gen.text.strip()
-
-    if not final:
-        if gen.stopped:
-            msg = t(lang, "stopped")
-        elif err is not None:
-            msg = friendly_error(lang, err)
-        else:
-            await log_error(user_id, "Пустой ответ от модели")
-            msg = t(lang, "empty")
-        try:
-            await bot.edit_message_text(msg[:4096], chat_id=chat_id, message_id=sent.message_id)
-        except Exception:
-            await bot.send_message(chat_id, msg[:4096])
-        await drop_stop_kb(chat_id, sent.message_id)
-        return
-
-    # ответ обрывался на середине / его остановили: показываем, что успели получить, и пометку
-    display = final
-    if gen.stopped:
-        display += "\n\n" + t(lang, "stopped_note")
-    elif err is not None:
-        display += "\n\n" + t(lang, "cut_note")
-
-    # --- доставка с форматированием (и кнопками, если включены в настройках) ---
-    last_id = sent.message_id
-    chunks = split_markdown(display)
-    kb = answer_kb(lang, prefs.buttons, "save" if prefs.save else None)
-    try:
-        await with_retry(
-            edit_md, chat_id, sent.message_id, chunks[0], kb if len(chunks) == 1 else None
-        )
-        for i, part in enumerate(chunks[1:], start=1):
-            msg = await with_retry(send_md, chat_id, part, kb if i == len(chunks) - 1 else None)
-            last_id = msg.message_id
-        if prefs.buttons:
-            last_kb_msg[user_id] = (chat_id, last_id)
-    except Exception:
-        logging.exception("Не удалось доставить ответ")
-        await log_error(user_id, "Не удалось доставить ответ в Telegram")
-    # у первого сообщения ответа «Стоп» должен пропасть в любом случае
-    await drop_stop_kb(chat_id, sent.message_id, kb if len(chunks) == 1 else None)
-
-    # --- сохраняем в память ---
-    if prefs.save:
-        await remember_answer(user_id, last_id, final)
-    if regen:
-        await pop_last_exchange(user_id)
-    await save_exchange(user_id, stored_question, final)
-    if images:
-        last_images[user_id] = images
-    if not gen.stopped and err is None and not regen:
-        await grant_ref_reward(user_id)
-        spawn(maybe_show_ad(chat_id, user_id, lang))
-
-
-# ================= ПРИГЛАШЕНИЯ И ИСТОЧНИКИ =================
-
-_me = {"username": ""}
-
-
-async def bot_username() -> str:
-    if not _me["username"]:
-        try:
-            _me["username"] = (await bot.get_me()).username or ""
-        except Exception:
-            logging.warning("Не удалось узнать username бота")
-    return _me["username"]
-
-
-async def get_ref_cfg() -> tuple[int, int]:
-    """(бонус в сутки за приглашение, макс. число друзей с бонусом) — меняется в админке."""
-    try:
-        bonus = max(0, int(await get_setting("ref_bonus", str(REF_BONUS))))
-    except ValueError:
-        bonus = REF_BONUS
-    try:
-        mx = max(0, int(await get_setting("ref_max", str(REF_MAX))))
-    except ValueError:
-        mx = REF_MAX
-    return bonus, mx
-
-
-async def register_start(uid: int, payload: str) -> None:
-    """Запоминает, откуда пришёл НОВЫЙ пользователь: по приглашению (ref_<id>) или по метке источника."""
-    cur = await db.execute("SELECT src, joined FROM users WHERE id=?", (uid,))
-    row = await cur.fetchone()
-    if not row or row["src"] is not None:
-        return
-    if row["joined"] and row["joined"] < int(time.time()) - 600:
-        # давно в боте, но источник не записан — не считаем новым
-        await db.execute("UPDATE users SET src='old' WHERE id=?", (uid,))
-        await db.commit()
-        return
-    payload = (payload or "").strip()
-    src, ref = "direct", None
-    if payload.startswith("ref_") and payload[4:].isdigit():
-        src = "ref"
-        r = int(payload[4:])
-        if r != uid and await scalar("SELECT COUNT(*) FROM users WHERE id=?", (r,)):
-            ref = r
-    elif SRC_RE.match(payload):
-        src = payload.lower()
-    await db.execute("UPDATE users SET src=?, ref_by=? WHERE id=?", (src, ref, uid))
-    await db.commit()
-
-
-async def grant_ref_reward(uid: int):
-    """После ПЕРВОГО успешного ответа приглашённого оба получают бонус к суточному лимиту."""
-    cur = await db.execute("SELECT ref_by, ref_paid FROM users WHERE id=?", (uid,))
-    row = await cur.fetchone()
-    if not row or not row["ref_by"] or row["ref_paid"]:
-        return
-    ref = row["ref_by"]
-    bonus, mx = await get_ref_cfg()
-    await db.execute("UPDATE users SET ref_paid=1, bonus=COALESCE(bonus,0)+? WHERE id=?", (bonus, uid))
-    paid = await scalar("SELECT COUNT(*) FROM users WHERE ref_by=? AND ref_paid=1", (ref,))
-    rewarded = paid <= mx
-    if rewarded:
-        await db.execute("UPDATE users SET bonus=COALESCE(bonus,0)+? WHERE id=?", (bonus, ref))
-    await db.commit()
-    if bonus <= 0:
-        return
-    try:
-        await bot.send_message(uid, t(await get_lang(uid), "ref_welcome", b=bonus))
-        if rewarded:
-            await bot.send_message(ref, t(await get_lang(ref), "ref_notify", b=bonus))
-    except Exception:
-        pass  # человек мог заблокировать бота — бонус всё равно начислен
-
-
-# ================= РЕКЛАМА (AdsGram) =================
-
-ads_last = {"why": "", "ts": 0}   # почему AdsGram в последний раз не дал рекламу (видно в админке)
-ads_state: dict[int, dict] = {}   # user_id -> {"n": ответов с прошлой рекламы, "last": время последнего показа}
-
-
-async def ads_enabled() -> bool:
-    return bool(ADSGRAM_BLOCK_ID) and (await get_setting("ads_on", "1")) == "1"
-
-
-async def get_ads_every() -> int:
-    try:
-        return max(1, int(await get_setting("ads_every", str(ADS_EVERY))))
-    except ValueError:
-        return max(1, ADS_EVERY)
-
-
-async def fetch_ad(user_id: int, lang: str) -> dict | None:
-    """Просит у AdsGram рекламу для пользователя. Нет рекламы или сбой — None (бот работает как обычно)."""
-    params = {"tgid": str(user_id), "blockid": ADSGRAM_BLOCK_ID, "language": lang}
-    if ADSGRAM_TOKEN:
-        params["token"] = ADSGRAM_TOKEN
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as sess:
-            async with sess.get(ADS_API, params=params) as r:
-                if r.status != 200:
-                    body = ""
-                    try:
-                        body = (await r.text())[:200]
-                    except Exception:
-                        pass
-                    ads_last.update(why=f"HTTP {r.status} {body}".strip(), ts=int(time.time()))
-                    logging.warning("AdsGram: ответ %s %s", r.status, body)
-                    return None
-                data = await r.json(content_type=None)
-    except Exception as e:
-        ads_last.update(why=f"{type(e).__name__}: {e}", ts=int(time.time()))
-        logging.warning("AdsGram: не удалось получить рекламу: %s: %s", type(e).__name__, e)
-        return None
-    if not isinstance(data, dict) or not data.get("text_html"):
-        ads_last.update(why=f"пустой ответ: {str(data)[:200]}", ts=int(time.time()))
-        logging.warning("AdsGram: пустой ответ: %s", str(data)[:200])
-        return None
-    return data
-
-
-async def send_ad(chat_id: int, ad: dict):
-    """Отправляет рекламу по правилам AdsGram: HTML-текст, картинка, кнопки, запрет пересылки."""
-    b = InlineKeyboardBuilder()
-    if ad.get("click_url") and ad.get("button_name"):
-        b.button(text=str(ad["button_name"])[:64], url=ad["click_url"])
-    if ad.get("reward_url") and ad.get("button_reward_name"):
-        b.button(text=str(ad["button_reward_name"])[:64], url=ad["reward_url"])
-    b.adjust(1)
-    kb = b.as_markup() if (ad.get("click_url") or ad.get("reward_url")) else None
-    text = str(ad["text_html"])
-    img = ad.get("image_url")
-    if img and len(text) <= 1000:
-        try:
-            await bot.send_photo(
-                chat_id, img, caption=text, parse_mode="HTML", reply_markup=kb, protect_content=True
-            )
-            return
-        except Exception as e:
-            logging.warning("AdsGram: не вышло отправить с картинкой (%s), шлю текстом", e)
-    await bot.send_message(
-        chat_id, text, parse_mode="HTML", reply_markup=kb, protect_content=True,
-        disable_web_page_preview=True,
-    )
-
-
-async def maybe_show_ad(chat_id: int, user_id: int, lang: str):
-    """Вызывается после каждого успешного ответа. Реклама идёт ОТДЕЛЬНЫМ сообщением и не задерживает ответ."""
-    try:
-        if user_id in ADMIN_IDS or not await ads_enabled():
-            return
-        st = ads_state.setdefault(user_id, {"n": 0, "last": 0.0})
-        st["n"] += 1
-        if st["n"] < await get_ads_every() or time.time() - st["last"] < ADS_MIN_GAP:
-            return
-        ad = await fetch_ad(user_id, lang)
-        ok = 0
-        if ad:
-            await send_ad(chat_id, ad)
-            ok = 1
-            st["n"] = 0
-            st["last"] = time.time()
-        else:
-            st["n"] = max(0, st["n"] - 2)   # рекламы нет — попробуем снова через пару ответов
-        await db.execute("INSERT INTO ads_log(ts, user_id, ok) VALUES(?,?,?)", (int(time.time()), user_id, ok))
-        await db.commit()
-    except Exception:
-        logging.exception("AdsGram: ошибка показа рекламы (на работу бота не влияет)")
-
-
 # ================= АДМИН-ПАНЕЛЬ (на русском) =================
 
 admin_router.message.filter(F.from_user.id.in_(ADMIN_IDS))
@@ -2384,7 +1052,7 @@ async def admin_callbacks(cb: types.CallbackQuery, state: FSMContext):
     elif action == "userinfo":
         await state.set_state(Admin.waiting)
         await state.update_data(action="userinfo")
-        await show(cb, "Пришли ID пользователя, чтобы посмотреть его карточку.\n/cancel — отмена")
+        await show(cb, "Пришли ID пользователя, чтобы посмотреть его карточку.\n/cancel — от        мена")
 
     elif action == "model":
         current = await get_setting("model", MODEL)
@@ -2800,8 +1468,6 @@ async def cmd_help(message: types.Message):
     await message.answer(t(lang, "help", n=await get_memory_len(), k=MAX_IMAGES), parse_mode="HTML")
 
 
-# --- очистка диалога (с подтверждением) ---
-
 @user_router.message(Command("clear", "reset"))
 @user_router.message(F.text.in_(BTN_CLEAR))
 async def cmd_clear(message: types.Message):
@@ -2843,8 +1509,6 @@ async def cb_clear(cb: types.CallbackQuery):
     await cb.answer()
 
 
-# --- режимы ---
-
 @user_router.message(Command("mode"))
 @user_router.message(F.text.in_(BTN_MODE))
 async def cmd_mode(message: types.Message):
@@ -2870,7 +1534,6 @@ async def cb_mode(cb: types.CallbackQuery):
         await cb.answer(t(lang, "mode_same"))
         return
     await set_user_field(uid, "mode", key)
-    # прошлый диалог сбрасываем, чтобы он не мешал новому режиму; сохранённые сообщения остаются
     await clear_history(uid, pinned=False, answers=False)
     p = await count_pinned(uid)
     try:
@@ -2890,8 +1553,6 @@ async def cb_mode(cb: types.CallbackQuery):
     await cb.answer()
 
 
-# --- настройки ---
-
 @user_router.message(Command("settings"))
 @user_router.message(F.text.in_(BTN_SETTINGS))
 async def cmd_settings(message: types.Message):
@@ -2910,7 +1571,6 @@ async def cb_settings(cb: types.CallbackQuery):
     if parts[1] == "lang" and len(parts) > 2 and parts[2] in LANGS:
         if parts[2] != prefs.lang:
             await set_user_field(uid, "lang", parts[2])
-            # у reply-клавиатуры нельзя поменять текст кнопок — присылаем новую
             await bot.send_message(
                 cb.message.chat.id, t(parts[2], "lang_changed"), reply_markup=get_main_menu(parts[2])
             )
@@ -2935,22 +1595,20 @@ async def cb_settings(cb: types.CallbackQuery):
 async def cmd_myprompt(message: types.Message, command: CommandObject):
     uid = message.from_user.id
     lang = await get_lang(uid)
-    arg = (command.args or "").strip()
-    if not arg:
-        current = await get_custom_prompt(uid)
-        await message.answer(
-            t(lang, "myprompt_help", current=html.escape(current) if current else t(lang, "none")),
-            parse_mode="HTML",
-        )
-    elif arg.lower() in ("reset", "clear", "off", "сброс"):
-        await set_user_field(uid, "custom_prompt", None)
-        await message.answer(t(lang, "myprompt_reset"))
-    else:
-        await set_user_field(uid, "custom_prompt", arg[:CUSTOM_PROMPT_MAX])
-        await message.answer(t(lang, "myprompt_saved"))
+    arg = (command.args or "").strip(            )
+            if not arg:
+                current = await get_custom_prompt(uid)
+                await message.answer(
+                    t(lang, "myprompt_help", current=html.escape(current) if current else t(lang, "none")),
+                    parse_mode="HTML",
+                )
+            elif arg.lower() in ("reset", "clear", "off", "сброс"):
+                await set_user_field(uid, "custom_prompt", None)
+                await message.answer(t(lang, "myprompt_reset"))
+            else:
+                await set_user_field(uid, "custom_prompt", arg[:CUSTOM_PROMPT_MAX])
+                await message.answer(t(lang, "myprompt_saved"))
 
-
-# --- инфо ---
 
 @user_router.message(F.text.in_(BTN_INFO))
 async def cmd_info(message: types.Message):
@@ -2999,8 +1657,6 @@ async def cmd_ask(message: types.Message):
     lang = await get_lang(message.from_user.id)
     await message.answer(t(lang, "ask"))
 
-
-# --- сохранённые сообщения ---
 
 def _preview(text: str, n: int = 140) -> str:
     s = " ".join(text.split())
@@ -3075,8 +1731,6 @@ async def cb_save(cb: types.CallbackQuery):
     await cb.answer(t(lang, "saved_deleted"))
 
 
-# --- «Повторить» / «Продолжить» ---
-
 @user_router.callback_query(F.data.in_({"re:regen", "re:cont"}))
 async def cb_retry(cb: types.CallbackQuery):
     uid = cb.from_user.id
@@ -3103,8 +1757,6 @@ async def cb_retry(cb: types.CallbackQuery):
         await run_ai(cb.message.chat.id, uid, t(lang, "continue_text"))
 
 
-# --- «Стоп» ---
-
 @user_router.callback_query(F.data == "st:stop")
 async def cb_stop(cb: types.CallbackQuery):
     uid = cb.from_user.id
@@ -3117,8 +1769,6 @@ async def cb_stop(cb: types.CallbackQuery):
         gen.task.cancel()
     await cb.answer()
 
-
-# --- экспорт диалога ---
 
 @user_router.message(Command("export"))
 async def cmd_export(message: types.Message):
@@ -3146,10 +1796,7 @@ async def cmd_export(message: types.Message):
     )
 
 
-# --- фото и альбомы ---
-
 async def process_photos(chat_id: int, uid: int, photos: list, caption: str, over: int = 0):
-    """Скачивает фото и отправляет их ИИ одним запросом."""
     lang = await get_lang(uid)
     images: list[str] = []
     last_err = None
@@ -3170,7 +1817,6 @@ async def process_photos(chat_id: int, uid: int, photos: list, caption: str, ove
 
 
 async def flush_album(gid: str):
-    """Ждёт, пока доедут все фото альбома, и обрабатывает их одним запросом."""
     buf = albums.get(gid)
     if buf is None:
         return
@@ -3197,7 +1843,6 @@ async def handle_photo(message: types.Message):
         await process_photos(message.chat.id, uid, [message.photo[-1]], caption)
         return
 
-    # Telegram присылает каждое фото альбома отдельным сообщением — собираем их вместе
     buf = albums.get(gid)
     if buf is None:
         buf = albums[gid] = {
@@ -3244,13 +1889,11 @@ async def handle_message(message: types.Message):
     await run_ai(message.chat.id, message.from_user.id, message.text)
 
 
-# Админский роутер подключаем первым, чтобы он перехватывал свои команды и ввод
 dp.include_router(admin_router)
 dp.include_router(user_router)
 
 
 async def setup_commands():
-    """Меню команд Telegram (кнопка «/»): на русском для русского клиента, иначе на английском."""
     try:
         await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS["en"]])
         for code, items in COMMANDS.items():
@@ -3258,13 +1901,13 @@ async def setup_commands():
                 [BotCommand(command=c, description=d) for c, d in items], language_code=code
             )
     except Exception:
-        logging.exception("Не удалось задать меню команд (это не критично)")
+        logging.exception("Не удалось задать меню команд")
 
 
 async def main():
     await init_db()
     if not ADMIN_IDS:
-        logging.warning("ADMIN_IDS не задан — админ-панель недоступна. Узнай ID командой /myid.")
+        logging.warning("ADMIN_IDS не задан — админ-панель недоступна.")
     await bot.delete_webhook(drop_pending_updates=True)
     await setup_commands()
     logging.info("🚀 Бот запущен!")
