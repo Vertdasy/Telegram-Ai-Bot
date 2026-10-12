@@ -159,7 +159,8 @@ TEXTS = {
         "btn_info": "ℹ Инфо",
         "btn_settings": "⚙️ Настройки",
         "btn_invite": "🎁 Пригласить",
-        "menu_updated": "🎁 В меню появилась кнопка «Пригласить»: зови друзей и получай бонусные запросы.",
+        "btn_help": "❓ Помощь",
+        "menu_updated": "✨ В меню появились кнопки «🎁 Пригласить» (бонусные запросы за друзей) и «❓ Помощь» (все возможности и команды).",
         "banned": "🚫 Доступ к боту ограничен.",
         "maintenance": "🔧 Бот на техническом обслуживании. Загляни чуть позже.",
         # --- приветствие и справка ---
@@ -168,25 +169,39 @@ TEXTS = {
             "Я — ИИ-ассистент на базе <b>{model}</b>. Отвечаю на вопросы, пишу и правлю тексты, "
             "помогаю с кодом, перевожу и разбираю изображения.\n\n"
             "✨ <b>Что я умею</b>\n"
-            "• 💬 Помню наш разговор — последние {n} сообщений\n"
+            "• 💬 Помню разговор — последние {n} сообщений (вопросы и ответы вместе)\n"
             "• 🎭 Меняю роль: переводчик, программист, редактор — кнопка «Режим»\n"
             "• 🖼 Смотрю фото и альбомы — до {k} изображений за раз\n"
-            "• 📌 Запоминаю важное: включи кнопку «Сохранить» в настройках\n\n"
+            "• 📌 Сохраняю важное: включи «Сохранить» в настройках — сообщение останется в памяти, "
+            "пока ты не очистишь диалог\n"
+            "• ⏹ Ответ можно остановить кнопкой «Стоп»\n"
+            "• 📄 Выгружаю диалог файлом — /export\n"
+            "• 🎁 Приглашай друзей и получай бонусные запросы — кнопка «Пригласить»\n\n"
             "🚀 <b>С чего начать</b>\n"
-            "Просто напиши вопрос или пришли фото. Меню внизу — режимы, настройки и очистка диалога, "
-            "полный список команд — /help"
+            "Напиши вопрос или пришли фото. Меню внизу: режимы, настройки, очистка диалога, "
+            "приглашение друзей и «Помощь» со всеми командами."
         ),
         "help": (
             "❓ <b>Справка</b>\n\n"
-            "Пиши вопросы обычным текстом и присылай фото (можно несколько сразу). "
-            "Пока ИИ отвечает, ответ можно остановить кнопкой «⏹ Стоп».\n\n"
+            "<b>Как пользоваться</b>\n"
+            "Пиши вопрос обычным текстом или присылай фото — можно сразу несколько (до {k}), "
+            "с подписью или без. Ответ приходит по мере написания, его можно остановить кнопкой «⏹ Стоп». "
+            "Если отправишь несколько сообщений подряд, отвечу на них по очереди.\n\n"
+            "<b>Память</b>\n"
+            "Я помню последние {n} сообщений — и твои вопросы, и мои ответы. Фото в памяти остаётся "
+            "только пометкой, сама картинка не хранится. Важное можно закрепить кнопкой «📌 Сохранить» "
+            "(включается в настройках): такие сообщения остаются, пока ты не очистишь диалог. "
+            "При смене режима диалог сбрасывается, сохранённое остаётся.\n\n"
+            "<b>Кнопки меню</b>\n"
+            "🤖 Задать вопрос · 🎭 Режим · 📝 Очистить диалог (с подтверждением) · ℹ Инфо · "
+            "⚙️ Настройки · 🎁 Пригласить · ❓ Помощь\n\n"
             "<b>Команды</b>\n"
             "/mode — выбрать режим (роль ИИ)\n"
-            "/settings — язык, кнопки под ответом, стиль ответа\n"
+            "/settings — язык, кнопки под ответом, кнопка «Сохранить», стиль ответа\n"
             "/saved — сохранённые сообщения\n"
             "/export — выгрузить диалог файлом\n"
-            "/invite — пригласить друзей и получить бонус\n"
-            "/clear — очистить диалог (с подтверждением)\n"
+            "/invite — пригласить друзей и получить бонус к лимиту\n"
+            "/clear — очистить диалог\n"
             "/myprompt — свои инструкции для ИИ\n"
             "/myid — твой Telegram ID"
         ),
@@ -200,7 +215,7 @@ TEXTS = {
         ),
         "invite_unavailable": "Не получилось сформировать ссылку, попробуй чуть позже.",
         "btn_share": "📤 Поделиться ботом",
-        "share_text": "Бесплатный ИИ-помощник в Telegram: отвечает на вопросы, пишет код, переводит, смотрит фото 🤖",
+        "share_text": "ИИ-помощник в Telegram: отвечает на вопросы, пишет код, переводит, разбирает фото и помнит разговор 🤖",
         "ref_welcome": "🎉 Добро пожаловать! Ты пришёл по приглашению — тебе добавлено <b>+{b}</b> запросов в сутки.",
         "ref_notify": "🎁 Твой друг начал пользоваться ботом! Тебе добавлено <b>+{b}</b> запросов в сутки. Подробнее: /invite",
         "ask": "💬 Задавай любой вопрос или пришли фото — можно сразу несколько. Я готов!",
@@ -227,6 +242,7 @@ TEXTS = {
             "📌 <b>Сохранено:</b> {pinned}\n"
             "🖼 <b>Фото:</b> до {k} за раз\n"
             "⏱ <b>Лимиты:</b> {limits}\n"
+            "🎁 <b>Бонус за друзей:</b> +{bonus} запросов в сутки (/invite)\n"
             "👤 <b>Создатель:</b> @ashoton"
         ),
         "limits_fmt": "{pm}/мин, {pd}/сутки (за 24 ч использовано: {u})",
@@ -365,7 +381,8 @@ TEXTS = {
         "btn_info": "ℹ Info",
         "btn_settings": "⚙️ Settings",
         "btn_invite": "🎁 Invite",
-        "menu_updated": "🎁 The menu now has an “Invite” button: invite friends and get bonus requests.",
+        "btn_help": "❓ Help",
+        "menu_updated": "✨ The menu now has “🎁 Invite” (bonus requests for friends) and “❓ Help” (all features and commands) buttons.",
         "banned": "🚫 Access to the bot is restricted.",
         "maintenance": "🔧 The bot is under maintenance. Please come back a bit later.",
         "start": (
@@ -373,25 +390,39 @@ TEXTS = {
             "I'm an AI assistant powered by <b>{model}</b>. I answer questions, write and edit texts, "
             "help with code, translate and look at images.\n\n"
             "✨ <b>What I can do</b>\n"
-            "• 💬 Remember our conversation — the last {n} messages\n"
+            "• 💬 Remember our conversation — the last {n} messages (questions and answers together)\n"
             "• 🎭 Switch roles: translator, programmer, editor — the “Mode” button\n"
             "• 🖼 Look at photos and albums — up to {k} images at once\n"
-            "• 📌 Keep important things: turn on the “Save” button in settings\n\n"
+            "• 📌 Keep what matters: turn on “Save” in settings — the message stays in memory "
+            "until you clear the chat\n"
+            "• ⏹ You can stop an answer with the “Stop” button\n"
+            "• 📄 Export the chat as a file — /export\n"
+            "• 🎁 Invite friends and get bonus requests — the “Invite” button\n\n"
             "🚀 <b>Getting started</b>\n"
-            "Just type a question or send a photo. The menu below has modes, settings and chat "
-            "clearing; the full list of commands is /help"
+            "Type a question or send a photo. The menu below has modes, settings, chat clearing, "
+            "friend invites and “Help” with all commands."
         ),
         "help": (
             "❓ <b>Help</b>\n\n"
-            "Type your questions as plain text and send photos (several at once is fine). "
-            "While the AI is answering you can stop it with the “⏹ Stop” button.\n\n"
+            "<b>How to use</b>\n"
+            "Type a question as plain text or send photos — several at once (up to {k}), with a caption "
+            "or without. The answer appears as it is written and can be stopped with the “⏹ Stop” button. "
+            "If you send several messages in a row, I'll answer them one by one.\n\n"
+            "<b>Memory</b>\n"
+            "I remember the last {n} messages — both your questions and my answers. A photo stays in "
+            "memory only as a marker, the image itself isn't stored. You can pin something important with "
+            "the “📌 Save” button (turn it on in settings): saved messages stay until you clear the chat. "
+            "Switching the mode resets the chat, saved messages are kept.\n\n"
+            "<b>Menu buttons</b>\n"
+            "🤖 Ask AI · 🎭 Mode · 📝 Clear chat (with confirmation) · ℹ Info · "
+            "⚙️ Settings · 🎁 Invite · ❓ Help\n\n"
             "<b>Commands</b>\n"
             "/mode — choose a mode (the AI's role)\n"
-            "/settings — language, buttons under answers, answer style\n"
+            "/settings — language, buttons under answers, “Save” button, answer style\n"
             "/saved — saved messages\n"
             "/export — download the chat as a file\n"
-            "/invite — invite friends and get a bonus\n"
-            "/clear — clear the chat (with confirmation)\n"
+            "/invite — invite friends and get a limit bonus\n"
+            "/clear — clear the chat\n"
             "/myprompt — your own instructions for the AI\n"
             "/myid — your Telegram ID"
         ),
@@ -405,7 +436,7 @@ TEXTS = {
         ),
         "invite_unavailable": "Couldn't build the link, please try again in a moment.",
         "btn_share": "📤 Share the bot",
-        "share_text": "A free AI assistant in Telegram: answers questions, writes code, translates, looks at photos 🤖",
+        "share_text": "An AI assistant in Telegram: answers questions, writes code, translates, analyzes photos and remembers the chat 🤖",
         "ref_welcome": "🎉 Welcome! You joined by invitation — <b>+{b}</b> requests per day were added for you.",
         "ref_notify": "🎁 Your friend started using the bot! <b>+{b}</b> requests per day were added for you. Details: /invite",
         "ask": "💬 Ask me anything or send a photo — several at once is fine. I'm ready!",
@@ -430,6 +461,7 @@ TEXTS = {
             "📌 <b>Saved:</b> {pinned}\n"
             "🖼 <b>Photos:</b> up to {k} at once\n"
             "⏱ <b>Limits:</b> {limits}\n"
+            "🎁 <b>Friend bonus:</b> +{bonus} requests per day (/invite)\n"
             "👤 <b>Creator:</b> @ashoton"
         ),
         "limits_fmt": "{pm}/min, {pd}/day ({u} used in the last 24 h)",
@@ -688,7 +720,8 @@ BTN_CLEAR = all_langs("btn_clear")
 BTN_INFO = all_langs("btn_info")
 BTN_SETTINGS = all_langs("btn_settings")
 BTN_INVITE = all_langs("btn_invite")
-MENU_VERSION = 2   # номер версии нижнего меню: при смене все пользователи один раз получают обновлённую клавиатуру
+BTN_HELP = all_langs("btn_help")
+MENU_VERSION = 3   # номер версии нижнего меню: при смене все пользователи один раз получают обновлённую клавиатуру
 
 
 def make_timeout():
@@ -1264,7 +1297,8 @@ def get_main_menu(lang: str):
     builder.add(types.KeyboardButton(text=t(lang, "btn_info")))
     builder.add(types.KeyboardButton(text=t(lang, "btn_settings")))
     builder.add(types.KeyboardButton(text=t(lang, "btn_invite")))
-    builder.adjust(2, 2, 2)
+    builder.add(types.KeyboardButton(text=t(lang, "btn_help")))
+    builder.adjust(2, 2, 3)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -2760,9 +2794,10 @@ async def cmd_invite(message: types.Message):
 
 
 @user_router.message(Command("help"))
+@user_router.message(F.text.in_(BTN_HELP))
 async def cmd_help(message: types.Message):
     lang = await get_lang(message.from_user.id)
-    await message.answer(t(lang, "help"), parse_mode="HTML")
+    await message.answer(t(lang, "help", n=await get_memory_len(), k=MAX_IMAGES), parse_mode="HTML")
 
 
 # --- очистка диалога (с подтверждением) ---
@@ -2953,6 +2988,7 @@ async def cmd_info(message: types.Message):
             pinned=pinned,
             k=MAX_IMAGES,
             limits=limits,
+            bonus=await get_bonus(uid),
         ),
         parse_mode="HTML",
     )
