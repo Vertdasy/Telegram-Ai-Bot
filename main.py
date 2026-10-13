@@ -293,8 +293,7 @@ TEXTS = {
             "📌 Сохранено: {pinned}\n"
             "⏱ Лимит: {limits}\n"
             "🔎 Поиск: {web}\n"
-            "🎁 Бонус: +{bonus} в сутки\n"
-            "👤 @ashoton"
+            "🎁 Бонус: +{bonus} в сутки"
         ),
         "limits_fmt": "{pm}/мин, {pd}/сутки (использовано {u})",
         "limits_admin": "без ограничений (админ)",
@@ -538,8 +537,7 @@ TEXTS = {
             "📌 Saved: {pinned}\n"
             "⏱ Limit: {limits}\n"
             "🔎 Search: {web}\n"
-            "🎁 Bonus: +{bonus} per day\n"
-            "👤 @ashoton"
+            "🎁 Bonus: +{bonus} per day"
         ),
         "limits_fmt": "{pm}/min, {pd}/day ({u} used)",
         "limits_admin": "no limits (admin)",
