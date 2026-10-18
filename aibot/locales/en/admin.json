@@ -1,0 +1,333 @@
+{
+  "adm_title": "🛠 <b>Admin panel</b>",
+  "adm_cancelled": "Cancelled.",
+  "adm_back": "⬅️ Back",
+  "adm_state_on": "on",
+  "adm_state_off": "off",
+  "adm_btn_stats": "📊 Statistics",
+  "adm_btn_users": "👥 Users",
+  "adm_btn_broadcast": "📢 Broadcast",
+  "adm_btn_errors": "⚠️ Errors",
+  "adm_btn_ban": "🚫 Ban",
+  "adm_btn_unban": "✅ Unban",
+  "adm_btn_model": "🧠 Model",
+  "adm_btn_prompt": "📝 Prompts",
+  "adm_btn_memory": "🧮 Memory",
+  "adm_btn_limits": "⏱ Limits",
+  "adm_btn_sources": "🔗 Sources",
+  "adm_btn_web": "🔎 Web search",
+  "adm_btn_ref": "🎁 Invites",
+  "adm_btn_speed": "⚡ Speed",
+  "adm_btn_user": "👤 User",
+  "adm_btn_backup": "💾 DB backup",
+  "adm_btn_lang": "🌐 Язык / Language",
+  "adm_btn_maint": "🔧 Maintenance: {state}",
+  "adm_stats": [
+    "📊 <b>Statistics</b>",
+    "",
+    "👥 Users: <b>{total}</b> (banned: {banned}, English: {en_users})",
+    "🟢 Active in 24h: <b>{active}</b>",
+    "🆕 New in 24h: <b>{new}</b>",
+    "💬 Requests in 24h: <b>{req_day}</b>",
+    "💬 Requests total: <b>{req_all}</b>",
+    "⚠️ Errors in 24h: <b>{err_day}</b>",
+    "🧠 Model: <code>{model}</code>",
+    "🧮 Dialog memory: <b>{memory}</b> messages",
+    "",
+    "🏆 <b>Top by requests:</b>",
+    "{top}"
+  ],
+  "adm_users": [
+    "👥 <b>Latest users:</b>",
+    "",
+    "{items}"
+  ],
+  "adm_errors": [
+    "⚠️ <b>Latest errors:</b>",
+    "",
+    "{items}"
+  ],
+  "adm_no_errors": "No errors 🎉",
+  "adm_ask_broadcast": [
+    "📢 Send the broadcast text as one message.",
+    "/cancel — cancel"
+  ],
+  "adm_bc_confirm": [
+    "Send this message to {total} users?",
+    "",
+    "— — —",
+    "{text}"
+  ],
+  "adm_bc_started": "📢 Broadcast started, I'll send a report when it's done.",
+  "adm_bc_cancelled": "Broadcast cancelled.",
+  "adm_bc_nothing": "Nothing to send.",
+  "adm_bc_done": "📢 Broadcast finished: delivered {ok}, failed {fail}.",
+  "adm_btn_send": "✅ Send",
+  "adm_btn_cancel": "❌ Cancel",
+  "adm_ask_ban": [
+    "Send the ID of the user to ban.",
+    "/cancel — cancel"
+  ],
+  "adm_ask_unban": [
+    "Send the ID of the user to unban.",
+    "/cancel — cancel"
+  ],
+  "adm_cannot_ban_admin": "You can't ban an admin",
+  "adm_cannot_ban_admin_msg": "You can't ban an admin.",
+  "adm_user_missing": "User not found.",
+  "adm_no_such_user": "No such user in the database.",
+  "adm_id_not_number": "The ID must be a number. Try again or /cancel.",
+  "adm_banned": "banned 🚫",
+  "adm_unbanned": "unbanned ✅",
+  "adm_ban_done": "User {uid} {done}",
+  "adm_ask_userinfo": [
+    "Send a user ID to see their card.",
+    "/cancel — cancel"
+  ],
+  "adm_btn_ban_user": "🚫 Ban",
+  "adm_btn_unban_user": "✅ Unban",
+  "adm_card_banned": "🚫 banned",
+  "adm_card_active": "✅ active",
+  "adm_style_deep": "thoughtful",
+  "adm_style_fast": "fast",
+  "adm_card": [
+    "👤 <b>{name}</b>",
+    "ID: <code>{uid}</code>",
+    "Status: {status}",
+    "Registered: {joined}",
+    "Last activity: {seen}",
+    "Answers received: {msgs} (requests in 24h: {req24})",
+    "Mode: {mode} · language: {ulang} · style: {style}",
+    "“Regenerate/Continue” buttons: {buttons} · “Save”: {save}",
+    "In memory: {used} messages · 📌 saved: {pins}",
+    "Custom instructions: {custom}"
+  ],
+  "adm_model": [
+    "🧠 <b>Current model:</b> <code>{model}</code>",
+    "Choose a new one:"
+  ],
+  "adm_model_set": "✅ Model changed: <code>{model}</code>",
+  "adm_ask_model": [
+    "Send the model ID (as shown in your provider's dashboard).",
+    "/cancel — cancel"
+  ],
+  "adm_btn_model_custom": "✏️ Other model",
+  "adm_prompt_menu": [
+    "📝 <b>System prompts</b>",
+    "",
+    "Choose the mode whose prompt you want to view or change. Every mode has two prompts: RU (for the Russian interface) and EN (for the English one). Changes apply to everyone immediately.",
+    "",
+    "{items}"
+  ],
+  "adm_prompt_item_custom": "• {title} — customised: {langs}",
+  "adm_prompt_item_default": "• {title} — default",
+  "adm_prompt_mode_head": [
+    "📝 <b>Prompt: {title}</b>",
+    ""
+  ],
+  "adm_prompt_lang_custom": [
+    "{flag} (customised):",
+    "<code>{text}</code>",
+    ""
+  ],
+  "adm_prompt_lang_default": [
+    "{flag} (default):",
+    "<code>{text}</code>",
+    ""
+  ],
+  "adm_prompt_note_default": "The bot adds the user's personal instructions (/myprompt), saved messages and the web-search hint to this prompt by itself.",
+  "adm_prompt_note_mode": "The bot adds the user's saved messages and the web-search hint (if the mode allows it) to the mode prompt by itself.",
+  "adm_ask_prompt": [
+    "Send a new system prompt for the “{title}” mode ({code}), up to {max} characters. It will replace the current one for all users.",
+    "/cancel — cancel"
+  ],
+  "adm_prompt_reset": [
+    "♻️ The mode prompts were reset to the defaults.",
+    "",
+    ""
+  ],
+  "adm_prompt_error": "Something went wrong, start over: /admin",
+  "adm_prompt_too_long": "Too long: {n} characters, the maximum is {max}. Shorten it or /cancel.",
+  "adm_prompt_updated": [
+    "✅ The “{title}” prompt ({code}) was updated.",
+    "",
+    ""
+  ],
+  "adm_btn_edit": "✏️ Edit {code}",
+  "adm_btn_reset_prompt": "♻️ Reset to default",
+  "adm_btn_modes_list": "⬅️ To the list of modes",
+  "adm_memory": [
+    "🧮 <b>Dialog memory</b>",
+    "",
+    "Currently: <b>{n}</b> messages (≈{pairs} “question — answer” pairs).",
+    "The bot stores both the user's messages and the AI's answers — all of it goes to the model with every request. The bigger the memory, the more tokens are spent and the longer an answer may take.",
+    "",
+    "📏 Size limit: <b>{chars}</b> characters of history per request. If the dialog is longer, the oldest messages are not sent to the model (but stay in memory until pushed out).",
+    "",
+    "In the database now: {total} messages from {users} users, 📌 saved: {pins}.",
+    "Allowed range: {min} to {max}. When you decrease it, old messages are deleted for everyone right away."
+  ],
+  "adm_ask_memory": [
+    "Send how many messages to remember ({min} to {max}). A question and an answer count as two messages.",
+    "/cancel — cancel"
+  ],
+  "adm_ask_hist_chars": [
+    "Send the history size limit in characters (1000 or more). The smaller it is, the faster the answers, but the fewer messages the model really sees. Now: <b>{n}</b>.",
+    "/cancel — cancel"
+  ],
+  "adm_memory_bad_number": "A whole number from {min} to {max} is needed. Try again or /cancel.",
+  "adm_hist_bad_number": "A whole number of 1000 or more is needed. Try again or /cancel.",
+  "adm_btn_mem_custom": "✏️ Custom number",
+  "adm_btn_hist_chars": "📏 Size limit",
+  "adm_ref": [
+    "🎁 <b>Friend invites</b>",
+    "",
+    "Invite bonus: <b>{state}</b> — both the friend and the inviter get it, for good.",
+    "Maximum friends with a bonus per person: <b>{mx}</b> (the invited friend always gets the bonus).",
+    "",
+    "The bonus is added to the daily limit (⏱ Limits) and granted after the friend's first answer. New values only affect future invitations — bonuses already granted don't change.",
+    "",
+    "Opened the links: {refs}, started using the bot: {paid}",
+    "",
+    "🏆 Top inviters:",
+    "{top}"
+  ],
+  "adm_ref_state_on": "+{bonus} requests per day",
+  "adm_ref_state_off": "off (0)",
+  "adm_ask_ref_bonus": [
+    "Send how many requests per day to give for an invitation (0 turns the bonus off). Now: <b>{n}</b>.",
+    "/cancel — cancel"
+  ],
+  "adm_ask_ref_max": [
+    "Send the maximum number of friends the inviter gets a bonus for (0 — only the friend gets a bonus). Now: <b>{n}</b>.",
+    "/cancel — cancel"
+  ],
+  "adm_bad_number_range": "A whole number from 0 to {top} is needed. Try again or /cancel.",
+  "adm_btn_ref_bonus": "✏️ Requests per day",
+  "adm_btn_ref_max": "✏️ Max friends",
+  "adm_web": [
+    "🔎 <b>Web search for the AI</b>",
+    "",
+    "Status: {state} (a user can turn it off in their settings)",
+    "Sources: {names}",
+    "In 24h: successful searches {ok}, failed {bad}, users {users}",
+    "{reason}{tip}",
+    "Latest queries:",
+    "{last}"
+  ],
+  "adm_web_on": "✅ on",
+  "adm_web_off": "⏸ off",
+  "adm_web_reason": [
+    "",
+    "⚠️ Last error: <code>{why}</code> ({ts})",
+    ""
+  ],
+  "adm_web_tip": [
+    "",
+    "💡 No key is set, so the free search is used with no guarantees. For stability, get a free Tavily key and add it to the <code>TAVILY_API_KEY</code> variable.",
+    ""
+  ],
+  "adm_btn_web_off": "⏸ Turn off",
+  "adm_btn_web_on": "▶️ Turn on",
+  "adm_sources": [
+    "🔗 <b>Where users come from</b>",
+    "",
+    "{lines}",
+    "",
+    "🎁 Invitations via friends' links: {refs}, started using the bot: {refs_paid}",
+    "",
+    "<b>How to track sources.</b> For every place where you publish the bot, give your own link with a tag:",
+    "<code>https://t.me/{bot}?start=tag</code>",
+    "The tag is Latin letters, digits, _ and -, up to 32 characters (for example <code>vc_post</code>, <code>tg1</code>). Only new users who pressed “Start” are counted."
+  ],
+  "adm_src_line": "• <b>{name}</b> — total {n}, wrote to the bot {act}, new in 7 days: {d7}",
+  "adm_src_old": "before source tracking",
+  "adm_src_direct": "direct (no tag)",
+  "adm_src_ref": "invited by friends",
+  "adm_src_fallback_bot": "your_bot",
+  "adm_btn_refresh": "🔄 Refresh",
+  "adm_limits": [
+    "⏱ <b>Request limits per person</b>",
+    "",
+    "Per minute: <b>{per_min}</b>",
+    "Per day: <b>{per_day}</b>",
+    "",
+    "Admins are not limited. 0 = unlimited."
+  ],
+  "adm_per_min": "per minute",
+  "adm_per_day": "per day",
+  "adm_ask_limit": [
+    "Send the number of requests {what} (0 — unlimited).",
+    "/cancel — cancel"
+  ],
+  "adm_limit_bad": "A whole number is needed (0 — unlimited). Try again or /cancel.",
+  "adm_limit_updated": "✅ Limit updated.",
+  "adm_btn_limit_min": "✏️ Per minute",
+  "adm_btn_limit_day": "✏️ Per day",
+  "adm_speed": [
+    "⚡ <b>Speed and reliability</b>",
+    "",
+    "🧠 Model: <code>{model}</code>",
+    "⚡ “Fast” (default for everyone): <b>{fast}</b>",
+    "🧠 “Thoughtful” (enabled in the user's settings): <b>{deep}</b>",
+    "🛟 Fallback model: <code>{fb}</code>",
+    "⏱ Timeout without data: {timeout} s, total: {total} s",
+    "🚫 Models that rejected the reasoning parameter: {bad}",
+    "",
+    "Reasoning level — the lower, the faster the answer. “Speed test” measures the time to the first word at different levels and shows whether the provider accepts the parameter."
+  ],
+  "adm_speed_fb_off": "off",
+  "adm_effort_default": "default",
+  "adm_effort_not_passed": " (don't send)",
+  "adm_eff_pick": [
+    "{title}: choose the model's reasoning level.",
+    "Lower — faster answers but less “thinking” on hard tasks.",
+    "“Default” — the parameter is not sent, the provider's own setting applies."
+  ],
+  "adm_eff_title_fast": "⚡ “Fast”",
+  "adm_eff_title_think": "🧠 “Thoughtful”",
+  "adm_fb_pick": [
+    "🛟 <b>Fallback model</b>",
+    "Used when the main one didn't answer (timeout or an error before the first word)."
+  ],
+  "adm_btn_eff_fast": "⚡ “Fast” level",
+  "adm_btn_eff_think": "🧠 “Thoughtful” level",
+  "adm_btn_fb": "🛟 Fallback model",
+  "adm_btn_speedtest": "🧪 Speed test",
+  "adm_btn_fb_off": "Turn the fallback off",
+  "adm_st_head": [
+    "🧪 <b>Speed test</b> (request: “answer in one word”)",
+    "",
+    ""
+  ],
+  "adm_st_running": [
+    "",
+    "⏳ testing…"
+  ],
+  "adm_st_empty": [
+    "⚠️ {label}",
+    "    empty answer, {total} s"
+  ],
+  "adm_st_ok": [
+    "✅ {label}",
+    "    to the first word: <b>{ttft} s</b>, total {total} s{extra}"
+  ],
+  "adm_st_thinking": " · has reasoning",
+  "adm_st_dropped": " · parameter rejected by the provider",
+  "adm_st_fail": [
+    "❌ {label}",
+    "    {err}"
+  ],
+  "adm_st_done": [
+    "",
+    "",
+    "Done. Pick the best option in the “Speed” section."
+  ],
+  "adm_st_already": "The test is already running",
+  "adm_st_starting": "Starting the test…",
+  "adm_backup_prep": "Preparing a database copy…",
+  "adm_backup_caption": "💾 Database copy (users, history, settings).",
+  "adm_backup_fail": "⚠️ Could not make a copy: {e}",
+  "adm_maint_on": "🔧 Maintenance <b>is on</b>: regular users see the maintenance message.",
+  "adm_maint_off": "✅ Maintenance is off."
+}

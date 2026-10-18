@@ -1,6 +1,5 @@
 aiogram>=3.4
 openai>=1.30
 aiosqlite>=0.19
-httpx>=0.24
 aiohttp>=3.9
-duckduckgo-search
+pypdf>=4.0
