@@ -61,7 +61,9 @@ async def cmd_start(message: types.Message, command: CommandObject):
         for code, name in LANGS.items():
             b.button(text=name, callback_data=f"lg:{code}")
         b.adjust(2)
-        await message.answer(t("ru", "lang_pick"), parse_mode="HTML", reply_markup=b.as_markup())
+        telegram_lang = (message.from_user.language_code or "").split("-", 1)[0].lower()
+        picker_lang = "en" if telegram_lang == "en" else "ru"
+        await message.answer(t(picker_lang, "lang_pick"), parse_mode="HTML", reply_markup=b.as_markup())
         return
     await send_welcome(message.chat.id, message.from_user, await get_lang(uid))
 
