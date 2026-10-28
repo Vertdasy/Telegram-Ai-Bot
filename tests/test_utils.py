@@ -1,7 +1,9 @@
 """Regression tests for text conversion, chunking, and document extraction."""
 
+import io
 import os
 import unittest
+import zipfile
 
 # The application config requires credentials at import time; these placeholders
 # keep utility tests independent from a real Telegram bot or AI provider.
@@ -63,6 +65,29 @@ class FileUtilityTests(unittest.TestCase):
         with self.assertRaises(FileProblem) as raised:
             extract_text("empty.txt", "text/plain", b"  \n ")
         self.assertEqual(raised.exception.key, "doc_empty")
+
+    def test_extract_docx_paragraph(self):
+        xml = (
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:r><w:t>Hello document</w:t></w:r></w:p></w:body></w:document>'
+        ).encode()
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("word/document.xml", xml)
+        self.assertEqual(extract_text("note.docx", None, archive.getvalue()), "Hello document")
+
+    def test_docx_rejects_entity_declaration(self):
+        xml = (
+            '<!DOCTYPE w:document [<!ENTITY x "unsafe">]>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:r><w:t>&x;</w:t></w:r></w:p></w:body></w:document>'
+        ).encode()
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("word/document.xml", xml)
+        with self.assertRaises(FileProblem) as raised:
+            extract_text("note.docx", None, archive.getvalue())
+        self.assertEqual(raised.exception.key, "doc_bad")
 
     def test_unsupported_binary_extension_has_user_facing_problem(self):
         with self.assertRaises(FileProblem) as raised:
