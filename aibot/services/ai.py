@@ -253,26 +253,35 @@ async def _run_locked(
     await db.execute("INSERT INTO requests(ts, user_id) VALUES(?,?)", (int(time.time()), user_id))
     await db.commit()
 
-    mode = await get_mode(user_id)
+    # Fetch independent settings/history limits together to reduce pre-request setup latency.
+    # The database connection serializes SQL internally, but this avoids unnecessary sequential
+    # coroutine round-trips before we can start the model request.
+    mode, configured_model, effort, fallback, memory, history_chars = await asyncio.gather(
+        get_mode(user_id),
+        get_setting("model", MODEL),
+        get_setting(
+            "effort_think" if prefs.think else "effort_fast",
+            EFFORT_THINK if prefs.think else EFFORT_FAST,
+        ),
+        get_setting("fallback_model", FALLBACK_MODEL),
+        get_memory_len(),
+        get_history_chars(),
+    )
     # web search: only in the default and Programmer modes, not for photos, unless disabled
     web = bool(
         not images and prefs.web and mode in ("default", "programmer") and WEB_MAX_ROUNDS > 0
         and await web_enabled()
     )
     tools = WEB_TOOL if web else None
-    prompt = await build_system_prompt(user_id, mode, lang, web=web)
-    model = VISION_MODEL if images else await get_setting("model", MODEL)
-    effort = await get_setting(
-        "effort_think" if prefs.think else "effort_fast",
-        EFFORT_THINK if prefs.think else EFFORT_FAST,
-    )
-    fallback = await get_setting("fallback_model", FALLBACK_MODEL)
+    model = VISION_MODEL if images else configured_model
 
-    memory = await get_memory_len()
-    history = await load_history(user_id, memory + (2 if regen else 0))
+    prompt, history = await asyncio.gather(
+        build_system_prompt(user_id, mode, lang, web=web),
+        load_history(user_id, memory + (2 if regen else 0)),
+    )
     if regen:
         history = history[:-2]
-    history = trim_by_chars(history, await get_history_chars())
+    history = trim_by_chars(history, history_chars)
 
     if images:
         user_content = [{"type": "text", "text": question}] + [
