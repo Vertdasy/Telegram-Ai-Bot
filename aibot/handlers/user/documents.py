@@ -14,7 +14,7 @@ from aibot.handlers.user.photos import process_photos
 from aibot.i18n import t
 from aibot.services.ai import run_ai
 from aibot.state import bot, doc_albums, user_router
-from aibot.utils.files import extract_text, FileProblem, IMAGE_MIMES
+from aibot.utils.files import extract_text, FileProblem, IMAGE_MIMES, is_file_too_large
 from aibot.utils.tasks import spawn
 
 
@@ -29,7 +29,7 @@ async def process_documents(chat_id: int, uid: int, docs: list, caption: str, ov
         name = getattr(d, "file_name", None) or "file"
         safe = html.escape(name)
         size = getattr(d, "file_size", None) or 0
-        if size > MAX_FILE_MB * 1024 * 1024:
+        if is_file_too_large(size):
             await bot.send_message(chat_id, t(lang, "doc_big", name=safe, mb=MAX_FILE_MB), parse_mode="HTML")
             continue
         try:
@@ -102,6 +102,14 @@ async def handle_document(message: types.Message):
     mime = (d.mime_type or "").lower()
     caption = (message.caption or "").strip()
     if mime in IMAGE_MIMES:   # image sent as a file (uncompressed)
+        size = getattr(d, "file_size", None) or 0
+        if is_file_too_large(size):
+            lang = await get_lang(uid)
+            await message.answer(
+                t(lang, "doc_big", name=html.escape(name), mb=MAX_FILE_MB),
+                parse_mode="HTML",
+            )
+            return
         await process_photos(message.chat.id, uid, [d], caption, mimes=[mime])
         return
     gid = message.media_group_id

@@ -5,7 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 
-from aibot.config import MAX_DOC_CHARS
+from aibot.config import MAX_DOC_CHARS, MAX_FILE_MB
 
 
 # --- files ---
@@ -19,6 +19,11 @@ TEXT_EXTS = {
 
 
 IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+
+def is_file_too_large(size: int | None) -> bool:
+    """Whether a Telegram file exceeds the configured upload size limit."""
+    return (size or 0) > MAX_FILE_MB * 1024 * 1024
 
 
 class FileProblem(Exception):
