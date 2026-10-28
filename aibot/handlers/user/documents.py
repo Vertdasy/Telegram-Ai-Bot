@@ -103,7 +103,7 @@ async def handle_document(message: types.Message):
     caption = (message.caption or "").strip()
     if mime in IMAGE_MIMES:   # image sent as a file (uncompressed)
         size = getattr(d, "file_size", None) or 0
-        if size > MAX_FILE_MB * 1024 * 1024:
+        if is_file_too_large(size):
             lang = await get_lang(uid)
             await message.answer(
                 t(lang, "doc_big", name=html.escape(name), mb=MAX_FILE_MB),
