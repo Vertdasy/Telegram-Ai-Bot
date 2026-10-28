@@ -102,6 +102,14 @@ async def handle_document(message: types.Message):
     mime = (d.mime_type or "").lower()
     caption = (message.caption or "").strip()
     if mime in IMAGE_MIMES:   # image sent as a file (uncompressed)
+        size = getattr(d, "file_size", None) or 0
+        if size > MAX_FILE_MB * 1024 * 1024:
+            lang = await get_lang(uid)
+            await message.answer(
+                t(lang, "doc_big", name=html.escape(name), mb=MAX_FILE_MB),
+                parse_mode="HTML",
+            )
+            return
         await process_photos(message.chat.id, uid, [d], caption, mimes=[mime])
         return
     gid = message.media_group_id
