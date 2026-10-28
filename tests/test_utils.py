@@ -10,7 +10,8 @@ import zipfile
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 os.environ.setdefault("AI_API_KEY", "test-api-key")
 
-from aibot.utils.files import FileProblem, _clean_text, _decode_text, extract_text
+from aibot.config import MAX_FILE_MB
+from aibot.utils.files import FileProblem, _clean_text, _decode_text, extract_text, is_file_too_large
 from aibot.utils.text import md_to_html, photo_tag, split_markdown
 
 
@@ -49,6 +50,13 @@ class TextUtilityTests(unittest.TestCase):
 
 
 class FileUtilityTests(unittest.TestCase):
+    def test_file_size_limit_boundary(self):
+        limit = MAX_FILE_MB * 1024 * 1024
+        self.assertFalse(is_file_too_large(None))
+        self.assertFalse(is_file_too_large(0))
+        self.assertFalse(is_file_too_large(limit))
+        self.assertTrue(is_file_too_large(limit + 1))
+
     def test_clean_text_normalizes_newlines_and_nulls(self):
         self.assertEqual(_clean_text(" a\r\nb\x00\r\n\n\nc "), "a\nb\n\nc")
 
