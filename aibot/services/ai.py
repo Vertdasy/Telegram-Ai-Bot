@@ -77,8 +77,20 @@ async def generate(
         calls: dict[int, dict] = {}
         reasoning = ""   # model reasoning: DeepSeek requires it to be sent back along with the tool call
         stream = None
+        request_started = time.monotonic()
+        first_chunk_logged = False
+        # Do not log the API key or message contents. These markers help distinguish
+        # local preparation delays from connection/TTFT delays at the OpenAI-compatible API.
+        logging.info(
+            "AI request dispatching: model=%s effort=%s tools=%s base_url=%s",
+            model, eff or "default", bool("tools" in kwargs), client.base_url,
+        )
         try:
             stream = await client.chat.completions.create(**kwargs)
+            logging.info(
+                "AI stream opened: model=%s elapsed=%.3fs",
+                model, time.monotonic() - request_started,
+            )
             async for chunk in stream:
                 if not chunk.choices:
                     continue
@@ -86,6 +98,12 @@ async def generate(
                 if delta is None:
                     continue
                 now = time.time()
+                if not first_chunk_logged:
+                    first_chunk_logged = True
+                    logging.info(
+                        "AI first chunk: model=%s elapsed=%.3fs",
+                        model, time.monotonic() - request_started,
+                    )
                 if gen.first_any_at is None:
                     gen.first_any_at = now
                 for tc in getattr(delta, "tool_calls", None) or []:
@@ -117,6 +135,12 @@ async def generate(
                 use_tools = None
                 tools_dropped = True
                 continue
+            raise
+        except Exception as e:
+            logging.warning(
+                "AI API stream failed: model=%s error=%s elapsed=%.3fs",
+                model, type(e).__name__, time.monotonic() - request_started,
+            )
             raise
         finally:
             if stream is not None:
