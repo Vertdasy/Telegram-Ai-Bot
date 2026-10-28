@@ -66,7 +66,8 @@ VISION_MODEL = os.getenv("VISION_MODEL", "deepseek-v4.1-flash")
 # --- speed and reliability ---
 # Model reasoning level for the "Fast" / "Thoughtful" styles:
 # default (don't pass the parameter), low, medium, high, xhigh. Changeable in the admin panel: ⚡ Speed.
-EFFORT_FAST = os.getenv("EFFORT_FAST", "low")
+# The provider benchmark timed out on "low" but returned a result for "default".
+EFFORT_FAST = os.getenv("EFFORT_FAST", "default")
 
 
 EFFORT_THINK = os.getenv("EFFORT_THINK", "high")
