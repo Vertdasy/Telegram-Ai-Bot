@@ -50,7 +50,7 @@ tests/                     # dependency-free tests (locale parity)
 Requires Python 3.10+.
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
-2. Get your Telegram ID from [@Getmyid_bot](https://t.me/Getmyid_bot) — this makes you the admin.
+2. Get your Telegram ID from [@Getmyid_bot](https://t.me/Getmyid_bot) — This needs to be done in order to include the admins in the variable..
 3. Get an API key from any OpenAI-compatible provider (and note its base URL and model name).
 4. Configure:
    ```bash
