@@ -54,8 +54,11 @@ Requires Python 3.10+.
 3. Get an API key from any OpenAI-compatible provider (and note its base URL and model name).
 4. Configure:
    ```bash
-   cp .env.example .env     # then fill in TELEGRAM_TOKEN, AI_API_KEY, ADMIN_IDS
+   cp .env.example .env
    ```
+   Fill in `TELEGRAM_TOKEN`, `AI_API_KEY`, and `ADMIN_IDS`. Make sure `AI_BASE_URL`, `ID_MODEL`, and `VISION_MODEL`
+   match the provider for your API key. The example uses the project's current default endpoint; replace it if you use
+   OpenAI, OpenRouter, or another compatible provider. Never commit your real `.env` file or API keys.
 5. Run:
    ```bash
    pip install -r requirements.txt
@@ -115,3 +118,13 @@ python -m unittest discover tests
 ## License
 
 [MIT](LICENSE)
+
+
+## Privacy and data
+
+The bot stores conversation history, saved messages, user settings, and operational records in its SQLite database.
+
+When a user sends a prompt, the bot sends the relevant prompt and conversation context to the AI provider configured by
+`AI_BASE_URL`. If web search is used, the search query is sent to the selected search backend. The bot operator is
+responsible for securing the host and database, setting an appropriate retention policy, and reviewing the privacy
+policies of the configured providers. Do not send sensitive information unless you are comfortable with those providers' terms.
